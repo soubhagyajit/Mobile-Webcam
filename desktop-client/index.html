@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AWC - Android Webcam Client</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              500: '#6366f1',
+              600: '#4f46e5',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      body {
+        @apply bg-[#0f172a] text-slate-200 antialiased h-screen overflow-hidden;
+      }
+    }
+    .glass {
+      @apply bg-slate-900/50 backdrop-blur-xl border border-slate-700/50;
+    }
+    .video-glow {
+      box-shadow: 0 0 50px -12px rgba(99, 102, 241, 0.3);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="flex h-full">
+    <aside class="w-80 glass border-r border-slate-800 p-6 flex flex-col gap-6 z-10">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-brand-500 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+        </div>
+        <h1 class="text-xl font-bold tracking-tight text-white">AWC <span class="text-[10px] font-medium px-2 py-0.5 bg-slate-800 rounded-full text-slate-400 align-middle ml-1">v1.0.1</span></h1>
+      </div>
+
+      <hr class="border-slate-800">
+
+      <div class="space-y-4">
+        <div class="space-y-2">
+          <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Connection URL</label>
+          <input type="text" id="serverUrl" value="http://localhost:8080/video" 
+                 class="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none transition-all">
+        </div>
+
+        <div class="grid grid-cols-1 gap-2">
+          <button id="connectBtn" class="w-full bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2">
+            <span>Connect Device</span>
+          </button>
+          <button id="disconnectBtn" disabled class="w-full bg-slate-800 hover:bg-red-500/20 hover:text-red-400 text-slate-400 font-semibold py-2.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+            Disconnect
+          </button>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tools</label>
+        <button id="virtualCamBtn" disabled class="w-full border border-slate-700 hover:border-emerald-500/50 hover:bg-emerald-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30">
+          Virtual Camera
+        </button>
+        <button id="popoutBtn" disabled class="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all disabled:opacity-30">
+          Pop-out Feed
+        </button>
+      </div>
+
+      <div class="mt-auto p-4 bg-slate-900/80 rounded-xl border border-slate-800/50">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-slate-500">Status</span>
+          <span id="modeIndicator" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase">Standby</span>
+        </div>
+        <div id="status" class="text-sm font-medium text-slate-400 italic">Ready to connect...</div>
+      </div>
+    </aside>
+
+    <main class="flex-1 relative flex flex-col bg-[#020617]">
+      <div class="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+        <div class="absolute -top-24 -right-24 w-96 h-96 bg-brand-600/10 rounded-full blur-[120px]"></div>
+        <div class="absolute -bottom-24 -left-24 w-96 h-96 bg-emerald-600/5 rounded-full blur-[120px]"></div>
+      </div>
+
+      <div class="flex-1 flex items-center justify-center p-8">
+        <div id="placeholder" class="max-w-md text-center space-y-6">
+          <div class="w-20 h-20 bg-slate-800/50 rounded-3xl mx-auto flex items-center justify-center border border-slate-700">
+            <svg class="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
+          </div>
+          <div>
+            <h2 class="text-2xl font-bold text-white mb-2">Connect Your Stream</h2>
+            <p class="text-slate-400 text-sm leading-relaxed">Toggle your phone's webcam server and enter the URL in the sidebar (for WIFI mode only) to begin.</p>
+          </div>
+          <div class="text-left bg-slate-900/40 p-4 rounded-xl border border-slate-800 text-xs text-slate-500 space-y-2">
+            <p>• USB: Connect your phone to PC with USB cable and restart this software.</p>
+            <p>• WiFi: Ensure both devices are on the same network.</p>
+          </div>
+        </div>
+
+        <div id="videoStreamDiv" class="hidden relative w-full h-full flex items-center justify-center">
+            <img id="videoStream" class="hidden max-w-full max-h-full rounded-2xl border border-slate-700/50 video-glow object-contain transition-all duration-500" alt="Stream">
+        </div>
+      </div>
+      
+      <div id="toast" class="absolute bottom-6 right-6 px-6 py-3 rounded-xl glass border-brand-500/30 text-sm font-medium translate-y-20 opacity-0 transition-all duration-300 pointer-events-none"></div>
+    </main>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const videoStream = document.getElementById('videoStream');
+    const videoStreamDiv = document.getElementById('videoStreamDiv');
+    const placeholder = document.getElementById('placeholder');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const popoutBtn = document.getElementById('popoutBtn');
+    const virtualCamBtn = document.getElementById('virtualCamBtn');
+    const serverUrlInput = document.getElementById('serverUrl');
+    const statusDiv = document.getElementById('status');
+    const modeIndicator = document.getElementById('modeIndicator');
+    const toastDiv = document.getElementById('toast');
+    
+    let isConnected = false;
+    let virtualCamActive = false;
+
+    function showToast(message, isError = false) {
+      toastDiv.textContent = message;
+      toastDiv.classList.remove('translate-y-20', 'opacity-0', 'border-red-500/30', 'border-brand-500/30');
+      toastDiv.classList.add(isError ? 'border-red-500/30' : 'border-brand-500/30');
+      
+      setTimeout(() => {
+        toastDiv.classList.add('translate-y-20', 'opacity-0');
+      }, 3000);
+    }
+
+    function updateStatus(message, state = 'idle') {
+      statusDiv.textContent = message;
+      const colors = {
+        idle: 'text-slate-400',
+        active: 'text-emerald-400',
+        error: 'text-red-400'
+      };
+      statusDiv.className = `text-sm font-medium italic ${colors[state]}`;
+    }
+
+    connectBtn.addEventListener('click', () => {
+      const url = serverUrlInput.value.trim();
+      if (!url) return showToast('Enter a URL first', true);
+
+      updateStatus('Connecting...', 'idle');
+      videoStream.src = url + '?t=' + Date.now();
+
+      videoStream.onload = () => {
+        isConnected = true;
+        placeholder.classList.add('hidden');
+        videoStream.classList.remove('hidden');
+        videoStreamDiv.classList.remove('hidden');
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        popoutBtn.disabled = false;
+        virtualCamBtn.disabled = false;
+        serverUrlInput.disabled = true;
+        modeIndicator.textContent = 'Streaming';
+        modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 uppercase';
+        updateStatus('Feed Live', 'active');
+      };
+
+      videoStream.onerror = () => {
+        updateStatus('Connection failed', 'error');
+        disconnect();
+      };
+    });
+
+    function disconnect() {
+      isConnected = false;
+      videoStream.src = '';
+      videoStream.classList.add('hidden');
+      videoStreamDiv.classList.add('hidden');
+      placeholder.classList.remove('hidden');
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      popoutBtn.disabled = true;
+      virtualCamBtn.disabled = true;
+      serverUrlInput.disabled = false;
+      modeIndicator.textContent = 'Standby';
+      modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase';
+      updateStatus('Disconnected', 'idle');
+      
+      if (virtualCamActive) ipcRenderer.send('stop-virtual-camera');
+      ipcRenderer.send('close-feed-window');
+    }
+
+    disconnectBtn.addEventListener('click', disconnect);
+
+    popoutBtn.addEventListener('click', () => {
+      ipcRenderer.send('open-feed-window', serverUrlInput.value.trim());
+    });
+
+    virtualCamBtn.addEventListener('click', () => {
+      if (!virtualCamActive) {
+        virtualCamBtn.disabled = true;
+        updateStatus('Starting Virtual Cam...', 'idle');
+        ipcRenderer.send('start-virtual-camera', serverUrlInput.value.trim());
+      } else {
+        ipcRenderer.send('stop-virtual-camera');
+      }
+    });
+
+    ipcRenderer.on('virtual-camera-status', (event, data) => {
+      virtualCamBtn.disabled = false;
+      if (data.success) {
+        virtualCamActive = data.message.includes('started');
+        virtualCamBtn.textContent = virtualCamActive ? 'Stop Virtual Cam' : 'Virtual Camera';
+        virtualCamBtn.classList.toggle('bg-red-500/10', virtualCamActive);
+        virtualCamBtn.classList.toggle('text-red-400', virtualCamActive);
+        showToast(data.message);
+      } else {
+        showToast(data.message, true);
+      }
+    });
+
+    // Handle full screen
+    document.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'f') {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+        else document.exitFullscreen();
+      }
+    });
+  </script>
+</body>
+</html>

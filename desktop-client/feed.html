@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html { 
+            margin: 0; padding: 0; 
+            height: 100vh; width: 100vw;
+            background: #000; overflow: hidden; 
+            display: flex; justify-content: center; align-items: center;
+        }
+        img { width: 100%; height: 100%; object-fit: contain; }
+    </style>
+</head>
+<body>
+    <img id="stream" src="">
+    <script>
+        const { ipcRenderer } = require('electron');
+        const img = document.getElementById('stream');
+        const urlParams = new URLSearchParams(window.location.search);
+        const streamUrl = urlParams.get('url');
+
+        if (streamUrl) {
+            img.src = streamUrl;
+            
+            // Wait for the actual image data to load to get dimensions
+            img.onload = () => {
+                const ratio = img.naturalWidth / img.naturalHeight;
+                // Send the dimensions back to the main process
+                ipcRenderer.send('resize-feed-window', {
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                    ratio: ratio
+                });
+            };
+        }
+    </script>
+</body>
+</html>

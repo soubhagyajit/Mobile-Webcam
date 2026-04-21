@@ -1,0 +1,10 @@
+node_modules/
+signaling-server/
+mobile-app/
+dist/
+*.jks
+*.keystore
+App Key/
+release/
+setup.bat
+setup.sh
