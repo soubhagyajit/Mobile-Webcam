@@ -37,7 +37,7 @@
 <body>
 
   <div class="flex h-full">
-    <aside class="w-80 glass border-r border-slate-800 p-6 flex flex-col gap-6 z-10">
+    <aside class="w-80 glass border-r border-slate-800 p-6 flex flex-col gap-6 z-10 overflow-y-auto">
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 bg-brand-500 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/20">
           <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
@@ -64,7 +64,42 @@
         </div>
       </div>
 
-      <div class="space-y-3">
+      <div class="space-y-4 pt-2 border-t border-slate-800">
+        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Camera Controls</label>
+        
+        <button id="flipBtn" disabled class="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30">
+          Flip Camera
+        </button>
+
+        <div class="space-y-1.5">
+          <span class="text-[10px] text-slate-500 font-bold uppercase">Resolution</span>
+          <select id="resSelect" disabled class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-brand-500">
+            <option value="0">480p</option>
+            <option value="1">720p</option>
+            <option value="2">1080p</option>
+          </select>
+        </div>
+
+        <div class="space-y-2">
+          <div class="flex justify-between items-center">
+            <span class="text-[10px] text-slate-500 font-bold uppercase">Focus Mode</span>
+            <select id="focusMode" disabled class="bg-transparent text-[10px] text-brand-400 font-bold outline-none cursor-pointer">
+              <option value="0" class="bg-slate-900">AUTO</option>
+              <option value="1" class="bg-slate-900">TAP</option>
+              <option value="2" class="bg-slate-900">MANUAL</option>
+            </select>
+          </div>
+          <div id="manualFocusCont" class="hidden space-y-1">
+            <input type="range" id="focusDist" min="0" max="1000" value="450" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500">
+            <div class="flex justify-between text-[8px] text-slate-500 uppercase">
+              <span>Infinity</span>
+              <span>Macro</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-3 pt-2 border-t border-slate-800">
         <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tools</label>
         <button id="virtualCamBtn" disabled class="w-full border border-slate-700 hover:border-emerald-500/50 hover:bg-emerald-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30">
           Virtual Camera
@@ -96,11 +131,7 @@
           </div>
           <div>
             <h2 class="text-2xl font-bold text-white mb-2">Connect Your Stream</h2>
-            <p class="text-slate-400 text-sm leading-relaxed">Toggle your phone's webcam server and enter the URL in the sidebar (for WIFI mode only) to begin.</p>
-          </div>
-          <div class="text-left bg-slate-900/40 p-4 rounded-xl border border-slate-800 text-xs text-slate-500 space-y-2">
-            <p>• USB: Connect your phone to PC with USB cable and restart this software.</p>
-            <p>• WiFi: Ensure both devices are on the same network.</p>
+            <p class="text-slate-400 text-sm leading-relaxed">Toggle your phone's webcam server and enter the URL in the sidebar.</p>
           </div>
         </div>
 
@@ -115,6 +146,8 @@
 
   <script>
     const { ipcRenderer } = require('electron');
+    
+    // UI Elements
     const videoStream = document.getElementById('videoStream');
     const videoStreamDiv = document.getElementById('videoStreamDiv');
     const placeholder = document.getElementById('placeholder');
@@ -126,29 +159,56 @@
     const statusDiv = document.getElementById('status');
     const modeIndicator = document.getElementById('modeIndicator');
     const toastDiv = document.getElementById('toast');
+
+    // Camera Control Elements
+    const flipBtn = document.getElementById('flipBtn');
+    const resSelect = document.getElementById('resSelect');
+    const focusMode = document.getElementById('focusMode');
+    const focusDist = document.getElementById('focusDist');
+    const manualFocusCont = document.getElementById('manualFocusCont');
     
     let isConnected = false;
     let virtualCamActive = false;
+    let isFrontCamera = false;
+
+    // --- Helper Functions ---
 
     function showToast(message, isError = false) {
       toastDiv.textContent = message;
       toastDiv.classList.remove('translate-y-20', 'opacity-0', 'border-red-500/30', 'border-brand-500/30');
       toastDiv.classList.add(isError ? 'border-red-500/30' : 'border-brand-500/30');
-      
-      setTimeout(() => {
-        toastDiv.classList.add('translate-y-20', 'opacity-0');
-      }, 3000);
+      setTimeout(() => toastDiv.classList.add('translate-y-20', 'opacity-0'), 3000);
     }
 
     function updateStatus(message, state = 'idle') {
       statusDiv.textContent = message;
-      const colors = {
-        idle: 'text-slate-400',
-        active: 'text-emerald-400',
-        error: 'text-red-400'
-      };
+      const colors = { idle: 'text-slate-400', active: 'text-emerald-400', error: 'text-red-400' };
       statusDiv.className = `text-sm font-medium italic ${colors[state]}`;
     }
+
+    // Helper to extract the base IP/Port (e.g., http://192.168.1.5:8080)
+    function getBaseUrl() {
+        try {
+            const url = new URL(serverUrlInput.value);
+            return `${url.protocol}//${url.host}`;
+        } catch(e) {
+            return null;
+        }
+    }
+
+    // Generic function to send hardware commands
+    async function sendControl(query) {
+        const base = getBaseUrl();
+        if (!base) return;
+        try {
+            await fetch(`${base}/control?${query}`);
+        } catch (err) {
+            console.error('Control failed', err);
+            showToast('Hardware command failed', true);
+        }
+    }
+
+    // --- Event Listeners ---
 
     connectBtn.addEventListener('click', () => {
       const url = serverUrlInput.value.trim();
@@ -162,11 +222,20 @@
         placeholder.classList.add('hidden');
         videoStream.classList.remove('hidden');
         videoStreamDiv.classList.remove('hidden');
+        
+        // Toggle Buttons
         connectBtn.disabled = true;
         disconnectBtn.disabled = false;
         popoutBtn.disabled = false;
         virtualCamBtn.disabled = false;
         serverUrlInput.disabled = true;
+
+        // Enable Hardware Controls
+        flipBtn.disabled = false;
+        resSelect.disabled = false;
+        focusMode.disabled = false;
+        focusDist.disabled = false;
+
         modeIndicator.textContent = 'Streaming';
         modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 uppercase';
         updateStatus('Feed Live', 'active');
@@ -184,11 +253,21 @@
       videoStream.classList.add('hidden');
       videoStreamDiv.classList.add('hidden');
       placeholder.classList.remove('hidden');
+      
+      // Disable UI
       connectBtn.disabled = false;
       disconnectBtn.disabled = true;
       popoutBtn.disabled = true;
       virtualCamBtn.disabled = true;
       serverUrlInput.disabled = false;
+
+      // Disable Hardware Controls
+      flipBtn.disabled = true;
+      resSelect.disabled = true;
+      focusMode.disabled = true;
+      focusDist.disabled = true;
+      manualFocusCont.classList.add('hidden');
+
       modeIndicator.textContent = 'Standby';
       modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase';
       updateStatus('Disconnected', 'idle');
@@ -198,6 +277,35 @@
     }
 
     disconnectBtn.addEventListener('click', disconnect);
+
+    // --- Hardware Control Events ---
+
+    flipBtn.addEventListener('click', () => {
+        isFrontCamera = !isFrontCamera;
+        sendControl(`flip=${isFrontCamera}`);
+        showToast(`Switched to ${isFrontCamera ? 'Front' : 'Back'} Camera`);
+    });
+
+    resSelect.addEventListener('change', (e) => {
+        sendControl(`resolution=${e.target.value}`);
+        showToast('Resolution updated');
+    });
+
+    focusMode.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        manualFocusCont.classList.toggle('hidden', mode !== '2');
+        sendControl(`focus_mode=${mode}`);
+    });
+
+    let focusTimeout;
+    focusDist.addEventListener('input', (e) => {
+        clearTimeout(focusTimeout);
+        focusTimeout = setTimeout(() => {
+            sendControl(`focus_distance=${e.target.value}`);
+        }, 50); // Debounce to prevent flooding network
+    });
+
+    // --- Software Tool Events ---
 
     popoutBtn.addEventListener('click', () => {
       ipcRenderer.send('open-feed-window', serverUrlInput.value.trim());
@@ -226,7 +334,6 @@
       }
     });
 
-    // Handle full screen
     document.addEventListener('keydown', (e) => {
       if (e.key.toLowerCase() === 'f') {
         if (!document.fullscreenElement) document.documentElement.requestFullscreen();

@@ -115,6 +115,7 @@ class MainActivity : AppCompatActivity() {
         focusTapButton = findViewById(R.id.focusTapButton)
         focusManualButton = findViewById(R.id.focusManualButton)
         focusSeekBar = findViewById(R.id.focusSeekBar)
+        focusSeekBar.max = 1000
 
         focusAutoButton.setOnClickListener { setFocusMode(0) }
         focusTapButton.setOnClickListener { setFocusMode(1) }
@@ -162,11 +163,7 @@ class MainActivity : AppCompatActivity() {
 
         resolutionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                prefs.edit().putInt("resolution_pos", position).apply()
-                // Only re-bind if camera is currently active
-                if (camera != null) {
-                    bindCameraWithAnalyzer()
-                }
+                setResolution(position)
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -221,6 +218,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setFocusMode(mode: Int) {
+        if (focusMode != mode) {
+            // Clear any active focus locks when switching modes
+            camera?.cameraControl?.cancelFocusAndMetering()
+        }
+        
         focusMode = mode
         val activeColor = ContextCompat.getColor(this, android.R.color.white)
         val inactiveColor = ContextCompat.getColor(this, android.R.color.darker_gray)
@@ -244,33 +246,33 @@ class MainActivity : AppCompatActivity() {
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun applyCurrentFocusMode() {
         val currentCamera = camera ?: return
-        val cameraControl = currentCamera.cameraControl
-        val camera2CameraControl = Camera2CameraControl.from(cameraControl)
+        val camera2CameraControl = Camera2CameraControl.from(currentCamera.cameraControl)
         
         try {
             val builder = CaptureRequestOptions.Builder()
+            
+            // Explicitly set CONTROL_MODE to ensure overrides are respected
+            builder.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+
             when (focusMode) {
                 0 -> { // Auto (Continuous)
-                    Log.d(TAG, "Setting Focus Mode: Auto (Continuous AF)")
+                    Log.d(TAG, "Applying Real-time Focus: Auto")
                     builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    camera2CameraControl.captureRequestOptions = builder.build()
-                    cameraControl.cancelFocusAndMetering()
                 }
                 1 -> { // Tap (Single AF)
-                    Log.d(TAG, "Setting Focus Mode: Tap (Single AF)")
+                    Log.d(TAG, "Applying Real-time Focus: Tap/Manual-AF")
                     builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                    camera2CameraControl.captureRequestOptions = builder.build()
                 }
                 2 -> { // Manual
-                    val progress = focusSeekBar.progress
-                    val focusDistance = progress / 10f
-                    Log.d(TAG, "Setting Focus Mode: Manual ($focusDistance)")
+                    // Focus distance is 0.0 (infinity) to 10.0+ (macro) depending on device
+                    val focusDistance = focusSeekBar.progress / 100f
+                    Log.d(TAG, "Applying Real-time Focus: Manual ($focusDistance)")
                     builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                     builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
-                    camera2CameraControl.captureRequestOptions = builder.build()
-                    cameraControl.cancelFocusAndMetering()
                 }
             }
+            // Use setCaptureRequestOptions to ensure we are the sole controller of these values for this session
+            camera2CameraControl.captureRequestOptions = builder.build()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to apply focus mode", e)
         }
@@ -278,26 +280,8 @@ class MainActivity : AppCompatActivity() {
 
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun applyFocusToBuilders(previewBuilder: Preview.Builder, analysisBuilder: ImageAnalysis.Builder) {
-        val previewExtender = Camera2Interop.Extender(previewBuilder)
-        val analysisExtender = Camera2Interop.Extender(analysisBuilder)
-        
-        when (focusMode) {
-            0 -> {
-                previewExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                analysisExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-            }
-            1 -> {
-                previewExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                analysisExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-            }
-            2 -> {
-                val focusDistance = focusSeekBar.progress / 10f
-                previewExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                previewExtender.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
-                analysisExtender.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                analysisExtender.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
-            }
-        }
+        // We no longer set focus-specific options here to avoid conflicts with Camera2CameraControl
+        // during real-time updates. Focus is handled in applyCurrentFocusMode().
     }
 
     private fun updateManualFocus(progress: Int) {
@@ -620,24 +604,45 @@ class MainActivity : AppCompatActivity() {
         currentFrame = out.toByteArray()
     }
 
+    private fun setResolution(position: Int) {
+        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+        if (prefs.getInt("resolution_pos", -1) != position) {
+            prefs.edit().putInt("resolution_pos", position).apply()
+            runOnUiThread {
+                if (resolutionSpinner.selectedItemPosition != position) {
+                    resolutionSpinner.setSelection(position)
+                }
+                // Only re-bind if camera is currently active
+                if (camera != null) {
+                    bindCameraWithAnalyzer()
+                }
+            }
+        }
+    }
+
     private fun flipCamera() {
         val popup = PopupMenu(this, flipButton)
         popup.menu.add(0, 0, 0, "Back Camera")
         popup.menu.add(0, 1, 1, "Front Camera")
         
         popup.setOnMenuItemClickListener { item ->
-            val targetFront = item.itemId == 1
-            if (isFrontCamera != targetFront) {
-                isFrontCamera = targetFront
+            setCamera(item.itemId == 1)
+            true
+        }
+        popup.show()
+    }
+
+    private fun setCamera(front: Boolean) {
+        if (isFrontCamera != front) {
+            isFrontCamera = front
+            runOnUiThread {
                 // Re-bind if camera is currently active
                 if (camera != null) {
                     bindCameraWithAnalyzer()
                 }
-                Toast.makeText(this, "Switched to ${item.title}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Switched to ${if (front) "Front" else "Back"} Camera", Toast.LENGTH_SHORT).show()
             }
-            true
         }
-        popup.show()
     }
 
     private fun updateStatus(message: String) {
@@ -651,8 +656,8 @@ class MainActivity : AppCompatActivity() {
         var connectionCount = 0
 
         override fun serve(session: IHTTPSession): Response {
-            return when (session.uri) {
-                "/video" -> {
+            return when {
+                session.uri == "/video" -> {
                     // Lazy start camera hardware on first connection
                     synchronized(this) {
                         if (connectionCount == 0) {
@@ -718,57 +723,110 @@ class MainActivity : AppCompatActivity() {
                     response.addHeader("Access-Control-Allow-Origin", "*")
                     return response
                 }
-                "/" -> {
+                session.uri == "/control" -> {
+                    val params = session.parameters
+                    
+                    params["focus_mode"]?.firstOrNull()?.toIntOrNull()?.let { mode ->
+                        runOnUiThread { setFocusMode(mode) }
+                    }
+                    
+                    params["focus_distance"]?.firstOrNull()?.toIntOrNull()?.let { dist ->
+                        runOnUiThread { 
+                            focusSeekBar.progress = dist
+                            updateManualFocus(dist)
+                        }
+                    }
+
+                    params["flip"]?.firstOrNull()?.toBoolean()?.let { front ->
+                        runOnUiThread { setCamera(front) }
+                    }
+
+                    params["resolution"]?.firstOrNull()?.toIntOrNull()?.let { index ->
+                        runOnUiThread { setResolution(index) }
+                    }
+
+                    val jsonResponse = """{"status":"ok"}"""
+                    val response = newFixedLengthResponse(Response.Status.OK, "application/json", jsonResponse)
+                    response.addHeader("Access-Control-Allow-Origin", "*")
+                    return response
+                }
+                session.uri == "/" -> {
                     val streamUrl = "/video"
                     newFixedLengthResponse("""
                         <!DOCTYPE html>
                         <html>
                         <head>
-                            <title>AWA Webcam</title>
+                            <title>AWA Remote Control</title>
                             <meta name="viewport" content="width=device-width, initial-scale=1">
                             <style>
                                 body { background: #0b0e14; color: #e2e8f0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
-                                .container { margin: 20px auto; max-width: 960px; border: 1px solid #2d3748; border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+                                .container { margin: 20px auto; max-width: 960px; border: 1px solid #2d3748; border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); position: relative; }
                                 img { width: 100%; height: auto; display: block; min-height: 200px; }
+                                .controls { background: #1a202c; padding: 20px; border-radius: 12px; max-width: 960px; margin: 20px auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; text-align: left; }
+                                .control-group { border: 1px solid #2d3748; padding: 15px; border-radius: 8px; }
+                                .control-group h3 { margin-top: 0; color: #6366f1; font-size: 14px; text-transform: uppercase; }
+                                button { background: #2d3748; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin: 4px; transition: background 0.2s; }
+                                button:hover { background: #4a5568; }
+                                button.active { background: #6366f1; }
+                                input[type=range] { width: 100%; margin-top: 10px; }
                                 .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
-                                .status-live { background: #c53030; color: white; animation: pulse 2s infinite; }
-                                @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
-                                code { background: #1a202c; padding: 2px 6px; border-radius: 4px; color: #6366f1; }
+                                .status-live { background: #c53030; color: white; }
                             </style>
                         </head>
                         <body>
-                            <h1 style="color: #6366F1; margin-bottom: 5px;">AWA</h1>
+                            <h1 style="color: #6366F1; margin-bottom: 5px;">AWA REMOTE</h1>
                             <div class="status status-live" id="connectionStatus">CONNECTING...</div>
                             
                             <div class="container">
                                 <img id="stream" src="$streamUrl" alt="Camera Stream">
                             </div>
-                            
-                            <p style="color: #a0aec0; margin-top: 20px;">Stream URL: <code>http://${session.headers["host"]}$streamUrl</code></p>
+
+                            <div class="controls">
+                                <div class="control-group">
+                                    <h3>Focus Mode</h3>
+                                    <button onclick="ctrl('focus_mode=0', this)" class="focus-btn">Auto</button>
+                                    <button onclick="ctrl('focus_mode=1', this)" class="focus-btn">Tap</button>
+                                    <button onclick="ctrl('focus_mode=2', this)" class="focus-btn">Manual</button>
+                                </div>
+                                <div class="control-group">
+                                    <h3>Manual Focus</h3>
+                                    <input type="range" min="0" max="1000" value="0" oninput="ctrl('focus_mode=2&focus_distance=' + this.value)">
+                                </div>
+                                <div class="control-group">
+                                    <h3>Camera</h3>
+                                    <button onclick="ctrl('flip=false')">Back</button>
+                                    <button onclick="ctrl('flip=true')">Front</button>
+                                </div>
+                                <div class="control-group">
+                                    <h3>Resolution</h3>
+                                    <button onclick="ctrl('resolution=0')">480p</button>
+                                    <button onclick="ctrl('resolution=1')">720p</button>
+                                    <button onclick="ctrl('resolution=2')">1080p</button>
+                                </div>
+                            </div>
 
                             <script>
-                                const img = document.getElementById('stream');
-                                const status = document.getElementById('connectionStatus');
-                                const baseUrl = "$streamUrl";
-                                
-                                function handleDisconnect() {
-                                    status.textContent = "RECONNECTING...";
-                                    status.style.background = "#4a5568";
-                                    setTimeout(() => {
-                                        img.src = baseUrl + "?t=" + new Date().getTime();
-                                    }, 2000);
+                                function ctrl(query, btn) {
+                                    fetch('/control?' + query).then(r => r.json()).then(data => {
+                                        if (btn && btn.classList.contains('focus-btn')) {
+                                            document.querySelectorAll('.focus-btn').forEach(b => b.classList.remove('active'));
+                                            btn.classList.add('active');
+                                        }
+                                    });
                                 }
 
-                                img.onerror = handleDisconnect;
+                                const img = document.getElementById('stream');
+                                const status = document.getElementById('connectionStatus');
+                                
+                                img.onerror = () => {
+                                    status.textContent = "DISCONNECTED";
+                                    status.style.background = "#4a5568";
+                                    setTimeout(() => { img.src = "/video?t=" + Date.now(); }, 2000);
+                                };
                                 img.onload = () => {
                                     status.textContent = "LIVE STREAM";
                                     status.style.background = "#c53030";
                                 };
-
-                                // Initial trigger to ensure we start trying immediately
-                                if (!img.complete || img.naturalWidth === 0) {
-                                    handleDisconnect();
-                                }
                             </script>
                         </body>
                         </html>
