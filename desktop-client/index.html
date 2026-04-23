@@ -42,7 +42,7 @@
         <div class="w-10 h-10 bg-brand-500 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/20">
           <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
         </div>
-        <h1 class="text-xl font-bold tracking-tight text-white">AWC <span class="text-[10px] font-medium px-2 py-0.5 bg-slate-800 rounded-full text-slate-400 align-middle ml-1">v1.0.2</span></h1>
+        <h1 class="text-xl font-bold tracking-tight text-white">AWC <span class="text-[10px] font-medium px-2 py-0.5 bg-slate-800 rounded-full text-slate-400 align-middle ml-1">v1.0.3</span></h1>
       </div>
 
       <hr class="border-slate-800">
@@ -55,42 +55,51 @@
         </div>
 
         <div class="grid grid-cols-1 gap-2">
-          <button id="connectBtn" class="w-full bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2">
-            <span>Connect Device</span>
-          </button>
-          <button id="disconnectBtn" disabled class="w-full bg-slate-800 hover:bg-red-500/20 hover:text-red-400 text-slate-400 font-semibold py-2.5 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-            Disconnect
+          <button id="toggleConnectBtn" class="w-full bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2">
+            <span id="toggleConnectBtnText">Connect Device</span>
           </button>
         </div>
       </div>
 
-      <div class="space-y-4 pt-2 border-t border-slate-800">
-        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Camera Controls</label>
+      <div id="cameraControls" class="hidden space-y-4 pt-2 border-t border-slate-800">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Camera Controls</label>
+          <button id="refreshSettingsBtn" class="text-xs text-brand-400 hover:text-brand-300 transition-colors flex items-center gap-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Sync
+          </button>
+        </div>
         
-        <button id="flipBtn" disabled class="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30">
-          Flip Camera
+        <button id="flipBtn" class="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span id="flipBtnText">Flip Camera</span>
         </button>
 
         <div class="space-y-1.5">
-          <span class="text-[10px] text-slate-500 font-bold uppercase">Resolution</span>
-          <select id="resSelect" disabled class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-brand-500">
-            <option value="0">480p</option>
-            <option value="1">720p</option>
-            <option value="2">1080p</option>
+          <div class="flex justify-between items-center">
+            <span class="text-[10px] text-slate-500 font-bold uppercase">Resolution</span>
+            <span id="currentResolution" class="text-[9px] text-brand-400 font-mono">Loading...</span>
+          </div>
+          <select id="resSelect" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-brand-500">
+            <option value="">Loading...</option>
           </select>
         </div>
 
-        <div class="space-y-2">
+        <div id="focusContainer" class="space-y-2">
           <div class="flex justify-between items-center">
             <span class="text-[10px] text-slate-500 font-bold uppercase">Focus Mode</span>
-            <select id="focusMode" disabled class="bg-transparent text-[10px] text-brand-400 font-bold outline-none cursor-pointer">
+            <select id="focusMode" class="bg-transparent text-[10px] text-brand-400 font-bold outline-none cursor-pointer">
               <option value="0" class="bg-slate-900">AUTO</option>
-              <option value="1" class="bg-slate-900">TAP</option>
-              <option value="2" class="bg-slate-900">MANUAL</option>
+              <option value="2" class="bg-slate-900" id="manualFocusOption">MANUAL</option>
             </select>
           </div>
+          <p id="focusSupportMsg" class="text-[9px] text-emerald-400 hidden">Manual focus supported</p>
           <div id="manualFocusCont" class="hidden space-y-1">
-            <input type="range" id="focusDist" min="0" max="1000" value="450" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-[9px] text-slate-500">Distance</span>
+              <span id="focusDistValue" class="text-[9px] text-brand-400 font-mono">500</span>
+            </div>
+            <input type="range" id="focusDist" min="0" max="1000" value="500" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500 disabled:opacity-30 disabled:cursor-not-allowed">
             <div class="flex justify-between text-[8px] text-slate-500 uppercase">
               <span>Infinity</span>
               <span>Macro</span>
@@ -151,8 +160,8 @@
     const videoStream = document.getElementById('videoStream');
     const videoStreamDiv = document.getElementById('videoStreamDiv');
     const placeholder = document.getElementById('placeholder');
-    const connectBtn = document.getElementById('connectBtn');
-    const disconnectBtn = document.getElementById('disconnectBtn');
+    const toggleConnectBtn = document.getElementById('toggleConnectBtn');
+    const toggleConnectBtnText = document.getElementById('toggleConnectBtnText');
     const popoutBtn = document.getElementById('popoutBtn');
     const virtualCamBtn = document.getElementById('virtualCamBtn');
     const serverUrlInput = document.getElementById('serverUrl');
@@ -161,15 +170,30 @@
     const toastDiv = document.getElementById('toast');
 
     // Camera Control Elements
+    const cameraControls = document.getElementById('cameraControls');
     const flipBtn = document.getElementById('flipBtn');
+    const flipBtnText = document.getElementById('flipBtnText');
     const resSelect = document.getElementById('resSelect');
+    const currentResolution = document.getElementById('currentResolution');
+    const focusContainer = document.getElementById('focusContainer');
     const focusMode = document.getElementById('focusMode');
     const focusDist = document.getElementById('focusDist');
+    const focusDistValue = document.getElementById('focusDistValue');
     const manualFocusCont = document.getElementById('manualFocusCont');
+    const manualFocusOption = document.getElementById('manualFocusOption');
+    const focusSupportMsg = document.getElementById('focusSupportMsg');
+    const refreshSettingsBtn = document.getElementById('refreshSettingsBtn');
     
     let isConnected = false;
     let virtualCamActive = false;
     let isFrontCamera = false;
+    let deviceFeatures = null;
+    let deviceSettings = null;
+    let syncInterval = null;
+
+    // Button Styling Constants
+    const BTN_CONNECT_STYLE = "w-full bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2";
+    const BTN_DISCONNECT_STYLE = "w-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-semibold py-2.5 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2";
 
     // --- Helper Functions ---
 
@@ -186,7 +210,6 @@
       statusDiv.className = `text-sm font-medium italic ${colors[state]}`;
     }
 
-    // Helper to extract the base IP/Port (e.g., http://192.168.1.5:8080)
     function getBaseUrl() {
         try {
             const url = new URL(serverUrlInput.value);
@@ -196,56 +219,164 @@
         }
     }
 
-    // Generic function to send hardware commands
     async function sendControl(query) {
         const base = getBaseUrl();
         if (!base) return;
         try {
-            await fetch(`${base}/control?${query}`);
+            const response = await fetch(`${base}/control?${query}`);
+            if (response.ok) {
+                showToast('✓ Command sent');
+                setTimeout(fetchSettings, 500);
+            }
         } catch (err) {
             console.error('Control failed', err);
-            showToast('Hardware command failed', true);
+            showToast('Command failed', true);
         }
     }
 
-    // --- Event Listeners ---
+    async function fetchFeatures() {
+        const base = getBaseUrl();
+        if (!base) return;
+        
+        try {
+            const response = await fetch(`${base}/features`);
+            if (!response.ok) throw new Error('Failed to fetch features');
+            
+            deviceFeatures = await response.json();
+            
+            // Populate resolution dropdown with ACTUAL strings as values
+            resSelect.innerHTML = '';
+            deviceFeatures.resolutions.forEach((res) => {
+                const option = document.createElement('option');
+                option.value = res; // Using string
+                option.textContent = res;
+                resSelect.appendChild(option);
+            });
+            
+            // Handle Manual Focus Support UI
+            focusSupportMsg.classList.remove('hidden');
+            if (deviceFeatures.manual_focus) {
+                focusSupportMsg.textContent = "Manual focus supported";
+                focusSupportMsg.className = "text-[9px] text-emerald-400 mb-1";
+                focusDist.disabled = false;
+                manualFocusOption.disabled = false;
+            } else {
+                focusSupportMsg.textContent = "Fixed focus camera";
+                focusSupportMsg.className = "text-[9px] text-red-400 mb-1";
+                focusDist.disabled = true;
+                manualFocusOption.disabled = true;
+                focusMode.value = "0"; // Force auto
+            }
+            
+            // Set initial camera toggle state
+            isFrontCamera = (deviceFeatures.camera === 'front');
+            updateFlipButtonText(deviceFeatures.camera);
+            
+        } catch (err) {
+            console.error('Failed to fetch features:', err);
+            showToast('Could not load device features', true);
+        }
+    }
 
-    connectBtn.addEventListener('click', () => {
+    async function fetchSettings() {
+        const base = getBaseUrl();
+        if (!base) return;
+        
+        try {
+            const response = await fetch(`${base}/settings`);
+            if (!response.ok) throw new Error('Failed to fetch settings');
+            
+            deviceSettings = await response.json();
+            syncUIWithSettings();
+        } catch (err) {
+            console.error('Failed to fetch settings:', err);
+        }
+    }
+
+    function syncUIWithSettings() {
+        if (!deviceSettings || !deviceFeatures) return;
+        
+        // Sync Resolution
+        currentResolution.textContent = deviceSettings.resolution_str;
+        if (deviceFeatures.resolutions.includes(deviceSettings.resolution_str)) {
+            resSelect.value = deviceSettings.resolution_str;
+        }
+        
+        // Sync Focus
+        focusMode.value = deviceSettings.focus_mode.toString();
+        
+        if (deviceSettings.focus_mode === 2) {
+            manualFocusCont.classList.remove('hidden');
+            focusDist.value = deviceSettings.focus_distance;
+            focusDistValue.textContent = deviceSettings.focus_distance;
+        } else {
+            manualFocusCont.classList.add('hidden');
+        }
+    }
+
+    function updateFlipButtonText(camera) {
+        if (camera === 'front') {
+            flipBtnText.textContent = 'Switch to Back';
+        } else {
+            flipBtnText.textContent = 'Switch to Front';
+        }
+    }
+
+    async function initializeDeviceSync() {
+        await fetchFeatures();
+        await fetchSettings();
+        syncInterval = setInterval(fetchSettings, 5000); // Polling every 5s like the test script
+    }
+
+    // --- Main Connection Flow ---
+
+    toggleConnectBtn.addEventListener('click', () => {
+        if (isConnected) {
+            disconnect();
+        } else {
+            connect();
+        }
+    });
+
+    function connect() {
       const url = serverUrlInput.value.trim();
       if (!url) return showToast('Enter a URL first', true);
 
       updateStatus('Connecting...', 'idle');
       videoStream.src = url + '?t=' + Date.now();
+      
+      toggleConnectBtn.disabled = true;
+      toggleConnectBtnText.textContent = "Connecting...";
 
-      videoStream.onload = () => {
+      videoStream.onload = async () => {
         isConnected = true;
         placeholder.classList.add('hidden');
         videoStream.classList.remove('hidden');
         videoStreamDiv.classList.remove('hidden');
         
-        // Toggle Buttons
-        connectBtn.disabled = true;
-        disconnectBtn.disabled = false;
+        // Update Toggle Button UI for Disconnect
+        toggleConnectBtn.disabled = false;
+        toggleConnectBtn.className = BTN_DISCONNECT_STYLE;
+        toggleConnectBtnText.textContent = "Disconnect";
+
         popoutBtn.disabled = false;
         virtualCamBtn.disabled = false;
         serverUrlInput.disabled = true;
 
-        // Enable Hardware Controls
-        flipBtn.disabled = false;
-        resSelect.disabled = false;
-        focusMode.disabled = false;
-        focusDist.disabled = false;
+        cameraControls.classList.remove('hidden');
 
         modeIndicator.textContent = 'Streaming';
         modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 uppercase';
         updateStatus('Feed Live', 'active');
+
+        await initializeDeviceSync();
       };
 
       videoStream.onerror = () => {
         updateStatus('Connection failed', 'error');
         disconnect();
       };
-    });
+    }
 
     function disconnect() {
       isConnected = false;
@@ -254,19 +385,21 @@
       videoStreamDiv.classList.add('hidden');
       placeholder.classList.remove('hidden');
       
-      // Disable UI
-      connectBtn.disabled = false;
-      disconnectBtn.disabled = true;
+      // Update Toggle Button UI for Connect
+      toggleConnectBtn.disabled = false;
+      toggleConnectBtn.className = BTN_CONNECT_STYLE;
+      toggleConnectBtnText.textContent = "Connect Device";
+
       popoutBtn.disabled = true;
       virtualCamBtn.disabled = true;
       serverUrlInput.disabled = false;
 
-      // Disable Hardware Controls
-      flipBtn.disabled = true;
-      resSelect.disabled = true;
-      focusMode.disabled = true;
-      focusDist.disabled = true;
-      manualFocusCont.classList.add('hidden');
+      cameraControls.classList.add('hidden');
+
+      if (syncInterval) {
+        clearInterval(syncInterval);
+        syncInterval = null;
+      }
 
       modeIndicator.textContent = 'Standby';
       modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase';
@@ -276,19 +409,17 @@
       ipcRenderer.send('close-feed-window');
     }
 
-    disconnectBtn.addEventListener('click', disconnect);
-
     // --- Hardware Control Events ---
 
     flipBtn.addEventListener('click', () => {
         isFrontCamera = !isFrontCamera;
         sendControl(`flip=${isFrontCamera}`);
-        showToast(`Switched to ${isFrontCamera ? 'Front' : 'Back'} Camera`);
+        updateFlipButtonText(isFrontCamera ? 'front' : 'back');
     });
 
     resSelect.addEventListener('change', (e) => {
-        sendControl(`resolution=${e.target.value}`);
-        showToast('Resolution updated');
+        // Send using resolution_str as requested by the test script
+        sendControl(`resolution_str=${encodeURIComponent(e.target.value)}`);
     });
 
     focusMode.addEventListener('change', (e) => {
@@ -299,10 +430,17 @@
 
     let focusTimeout;
     focusDist.addEventListener('input', (e) => {
+        focusDistValue.textContent = e.target.value;
         clearTimeout(focusTimeout);
         focusTimeout = setTimeout(() => {
-            sendControl(`focus_distance=${e.target.value}`);
-        }, 50); // Debounce to prevent flooding network
+            // Updated to bundle focus_mode=2 with distance adjust just in case
+            sendControl(`focus_mode=2&focus_distance=${e.target.value}`);
+        }, 100);
+    });
+
+    refreshSettingsBtn.addEventListener('click', () => {
+        fetchSettings();
+        showToast('Syncing settings...');
     });
 
     // --- Software Tool Events ---
