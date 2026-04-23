@@ -6,6 +6,9 @@ import android.content.Intent
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
@@ -19,7 +22,6 @@ import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import android.hardware.camera2.CaptureRequest
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -56,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var closeSettingsButton: ImageButton
     private lateinit var dimTimeoutSpinner: Spinner
     private lateinit var dimOverlay: View
+    private lateinit var focusRing: ImageView
     
     private lateinit var focusAutoButton: TextView
     private lateinit var focusTapButton: TextView
@@ -70,14 +73,18 @@ class MainActivity : AppCompatActivity() {
     
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private lateinit var cameraExecutor: ExecutorService
     private var httpServer: VideoServer? = null
-    private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     
     private var isFrontCamera = false
     @Volatile
     private var isServerRunning = false
     @Volatile
     private var currentFrame: ByteArray? = null
+    
+    // Pre-allocated buffers for zero-copy (or reduced copy) image processing
+    private var nv21Buffer: ByteArray? = null
+    private val jpegOutputStream = ByteArrayOutputStream()
     
     private val PORT = 8080
 
@@ -87,8 +94,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Keep screen on
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        cameraExecutor = Executors.newSingleThreadExecutor()
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or 
+                           WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        }
+        
         setContentView(R.layout.activity_main_simple)
 
         initViews()
@@ -110,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         closeSettingsButton = findViewById(R.id.closeSettingsButton)
         dimTimeoutSpinner = findViewById(R.id.dimTimeoutSpinner)
         dimOverlay = findViewById(R.id.dimOverlay)
+        focusRing = findViewById(R.id.focusRing)
         
         focusAutoButton = findViewById(R.id.focusAutoButton)
         focusTapButton = findViewById(R.id.focusTapButton)
@@ -137,15 +155,22 @@ class MainActivity : AppCompatActivity() {
         stopButton = findViewById(R.id.stopButton)
         idleOverlay = findViewById(R.id.idleOverlay)
 
-        val resolutions = arrayOf("640x480", "1280x720", "1920x1080")
-        val resAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, resolutions)
-        resolutionSpinner.adapter = resAdapter
-        resolutionSpinner.setSelection(prefs.getInt("resolution_pos", 1))
+        updateResolutionSpinner(isFrontCamera)
 
         val dimOptions = arrayOf("Never", "30 seconds", "1 minute", "2 minutes", "5 minutes")
         val dimAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, dimOptions)
         dimTimeoutSpinner.adapter = dimAdapter
-        dimTimeoutSpinner.setSelection(prefs.getInt("dim_pos", 0))
+        
+        val savedDimPos = prefs.getInt("dim_pos", 0)
+        dimTimeoutMs = when (savedDimPos) {
+            1 -> 30000L
+            2 -> 60000L
+            3 -> 120000L
+            4 -> 300000L
+            else -> 0L
+        }
+        dimTimeoutSpinner.setSelection(savedDimPos)
+        
         dimTimeoutSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 dimTimeoutMs = when (position) {
@@ -206,14 +231,19 @@ class MainActivity : AppCompatActivity() {
     private fun isDimmed(): Boolean = dimOverlay.visibility == View.VISIBLE
 
     private fun showDimOverlay() {
-        if (isServerRunning) { // Only dim if server is running to avoid confusion? 
-            // Actually user might want it dimmed even when just previewing.
-            dimOverlay.visibility = View.VISIBLE
-        }
+        dimOverlay.visibility = View.VISIBLE
+        // Set screen brightness to minimum to save power
+        val params = window.attributes
+        params.screenBrightness = 0.01f
+        window.attributes = params
     }
 
     private fun hideDimOverlay() {
         dimOverlay.visibility = View.GONE
+        // Restore default screen brightness
+        val params = window.attributes
+        params.screenBrightness = -1.0f
+        window.attributes = params
         resetDimTimer()
     }
 
@@ -363,11 +393,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestPermissions() {
+        val permissions = mutableListOf(Manifest.permission.CAMERA)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         Dexter.withContext(this)
-            .withPermissions(Manifest.permission.CAMERA)
+            .withPermissions(permissions)
             .withListener(object : MultiplePermissionsListener {
                 override fun onPermissionsChecked(report: MultiplePermissionsReport) {
-                    if (report.areAllPermissionsGranted()) {
+                    // We primarily care about the CAMERA permission to proceed.
+                    // If POST_NOTIFICATIONS is denied, the user just won't see the foreground icon on Android 13+,
+                    // but the server can still run (though it might get killed more easily by the OS).
+                    var cameraGranted = false
+                    report.grantedPermissionResponses.forEach {
+                        if (it.permissionName == Manifest.permission.CAMERA) {
+                            cameraGranted = true
+                        }
+                    }
+
+                    if (cameraGranted) {
                         updateStatus("READY")
                         displayNetworkInfo()
                         startServer() // Auto-start the server once permissions are ready
@@ -428,6 +473,7 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
             
+            updateKeepScreenOn(true)
             updateUiState(true)
             updateStatus("LIVE")
             
@@ -451,6 +497,7 @@ class MainActivity : AppCompatActivity() {
         camera = null
         currentFrame = null
         
+        updateKeepScreenOn(false)
         updateUiState(false)
         updateStatus("STOPPED")
     }
@@ -485,14 +532,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         previewView.setOnTouchListener { v, event ->
-            if (focusMode == 1 && event.action == android.view.MotionEvent.ACTION_UP) {
-                val factory = previewView.meteringPointFactory
-                val point = factory.createPoint(event.x, event.y)
-                val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
-                    .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
-                    .build()
-                Log.d(TAG, "Triggering tap-to-focus")
-                camera?.cameraControl?.startFocusAndMetering(action)
+            if (event.action == android.view.MotionEvent.ACTION_UP) {
+                // Show visual focus ring
+                showFocusRing(event.x, event.y)
+
+                if (focusMode == 0) {
+                    setFocusMode(1) // Switch to Tap mode on touch
+                }
+
+                if (focusMode == 1) {
+                    val factory = previewView.meteringPointFactory
+                    val point = factory.createPoint(event.x, event.y)
+                    val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                        .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    Log.d(TAG, "Triggering tap-to-focus")
+                    camera?.cameraControl?.startFocusAndMetering(action)
+                }
                 v.performClick()
                 true
             } else false
@@ -578,7 +634,12 @@ class MainActivity : AppCompatActivity() {
 
         val ySize = yBuffer.remaining()
         // NV21 size is width * height * 1.5
-        val nv21 = ByteArray(ySize + (ySize / 2))
+        val nv21Size = ySize + (ySize / 2)
+        
+        if (nv21Buffer == null || nv21Buffer!!.size != nv21Size) {
+            nv21Buffer = ByteArray(nv21Size)
+        }
+        val nv21 = nv21Buffer!!
         
         // Copy Y plane
         yBuffer.get(nv21, 0, ySize)
@@ -599,23 +660,74 @@ class MainActivity : AppCompatActivity() {
         }
 
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 80, out)
-        currentFrame = out.toByteArray()
+        jpegOutputStream.reset() // Reuse the stream instead of allocating a new one
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 80, jpegOutputStream)
+        currentFrame = jpegOutputStream.toByteArray()
+    }
+
+    private fun updateResolutionSpinner(front: Boolean) {
+        val manager = getSystemService(android.content.Context.CAMERA_SERVICE) as CameraManager
+        try {
+            val cameraId = manager.cameraIdList.firstOrNull { id ->
+                val chars = manager.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                if (front) facing == CameraCharacteristics.LENS_FACING_FRONT
+                else facing == CameraCharacteristics.LENS_FACING_BACK
+            } ?: manager.cameraIdList.firstOrNull() ?: return
+
+            val chars = manager.getCameraCharacteristics(cameraId)
+            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val resolutions = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            
+            // Common useful resolutions or all if needed. Let's filter to keep it sane or just show top 10
+            val resList = resolutions.map { "${it.width}x${it.height}" }.distinct()
+                .sortedByDescending { 
+                    val parts = it.split("x")
+                    parts[0].toInt() * parts[1].toInt()
+                }
+                .take(15)
+
+            val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+            val savedRes = prefs.getString("resolution_str_${if(front) "f" else "b"}", "1280x720")
+
+            val resAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, resList)
+            resolutionSpinner.adapter = resAdapter
+            
+            val index = resList.indexOf(savedRes)
+            if (index >= 0) {
+                resolutionSpinner.setSelection(index)
+            } else {
+                // Default to something sensible if not found
+                val fallbackIndex = resList.indexOfFirst { it.startsWith("1280x") }
+                resolutionSpinner.setSelection(if (fallbackIndex >= 0) fallbackIndex else 0)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating resolutions", e)
+        }
     }
 
     private fun setResolution(position: Int) {
+        val resStr = resolutionSpinner.adapter.getItem(position).toString()
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
-        if (prefs.getInt("resolution_pos", -1) != position) {
-            prefs.edit().putInt("resolution_pos", position).apply()
-            runOnUiThread {
-                if (resolutionSpinner.selectedItemPosition != position) {
-                    resolutionSpinner.setSelection(position)
-                }
-                // Only re-bind if camera is currently active
-                if (camera != null) {
-                    bindCameraWithAnalyzer()
-                }
+        prefs.edit().putString("resolution_str_${if(isFrontCamera) "f" else "b"}", resStr).apply()
+        
+        runOnUiThread {
+            if (resolutionSpinner.selectedItemPosition != position) {
+                resolutionSpinner.setSelection(position)
+            }
+            // Only re-bind if camera is currently active
+            if (camera != null) {
+                bindCameraWithAnalyzer()
+            }
+        }
+    }
+
+    private fun setResolutionByString(resStr: String) {
+        val adapter = resolutionSpinner.adapter
+        for (i in 0 until adapter.count) {
+            if (adapter.getItem(i).toString() == resStr) {
+                runOnUiThread { setResolution(i) }
+                return
             }
         }
     }
@@ -636,6 +748,7 @@ class MainActivity : AppCompatActivity() {
         if (isFrontCamera != front) {
             isFrontCamera = front
             runOnUiThread {
+                updateResolutionSpinner(front)
                 // Re-bind if camera is currently active
                 if (camera != null) {
                     bindCameraWithAnalyzer()
@@ -645,10 +758,53 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateKeepScreenOn(keep: Boolean) {
+        runOnUiThread {
+            if (keep) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    private fun triggerCenterFocus() {
+        val width = previewView.width.toFloat()
+        val height = previewView.height.toFloat()
+        if (width > 0 && height > 0) {
+            val factory = previewView.meteringPointFactory
+            val centerPoint = factory.createPoint(width / 2f, height / 2f)
+            val action = FocusMeteringAction.Builder(centerPoint, FocusMeteringAction.FLAG_AF)
+                .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            camera?.cameraControl?.startFocusAndMetering(action)
+            showFocusRing(width / 2f, height / 2f)
+        }
+    }
+
     private fun updateStatus(message: String) {
         runOnUiThread {
             statusText.text = message
         }
+    }
+
+    private fun showFocusRing(x: Float, y: Float) {
+        if (settingsPage.visibility == View.VISIBLE || isDimmed()) return
+
+        focusRing.translationX = x - focusRing.width / 2
+        focusRing.translationY = y - focusRing.height / 2
+        focusRing.visibility = View.VISIBLE
+        focusRing.alpha = 1f
+        focusRing.scaleX = 1.2f
+        focusRing.scaleY = 1.2f
+
+        focusRing.animate()
+            .scaleX(1.0f)
+            .scaleY(1.0f)
+            .alpha(0f)
+            .setDuration(500)
+            .withEndAction { focusRing.visibility = View.INVISIBLE }
+            .start()
     }
 
     inner class VideoServer(port: Int) : NanoHTTPD(port) {
@@ -723,11 +879,34 @@ class MainActivity : AppCompatActivity() {
                     response.addHeader("Access-Control-Allow-Origin", "*")
                     return response
                 }
+                session.uri == "/settings" -> {
+                    val resStr = resolutionSpinner.selectedItem?.toString() ?: "Unknown"
+                    val settings = """
+                        {
+                            "focus_mode": $focusMode,
+                            "focus_distance": ${focusSeekBar.progress},
+                            "flip": $isFrontCamera,
+                            "resolution_str": "$resStr"
+                        }
+                    """.trimIndent()
+                    val response = newFixedLengthResponse(Response.Status.OK, "application/json", settings)
+                    response.addHeader("Access-Control-Allow-Origin", "*")
+                    return response
+                }
+                session.uri == "/features" -> {
+                    val features = getCameraFeatures(isFrontCamera)
+                    val response = newFixedLengthResponse(Response.Status.OK, "application/json", features)
+                    response.addHeader("Access-Control-Allow-Origin", "*")
+                    return response
+                }
                 session.uri == "/control" -> {
                     val params = session.parameters
                     
                     params["focus_mode"]?.firstOrNull()?.toIntOrNull()?.let { mode ->
-                        runOnUiThread { setFocusMode(mode) }
+                        runOnUiThread { 
+                            setFocusMode(mode) 
+                            if (mode == 1) triggerCenterFocus()
+                        }
                     }
                     
                     params["focus_distance"]?.firstOrNull()?.toIntOrNull()?.let { dist ->
@@ -741,8 +920,8 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread { setCamera(front) }
                     }
 
-                    params["resolution"]?.firstOrNull()?.toIntOrNull()?.let { index ->
-                        runOnUiThread { setResolution(index) }
+                    params["resolution_str"]?.firstOrNull()?.let { res ->
+                        runOnUiThread { setResolutionByString(res) }
                     }
 
                     val jsonResponse = """{"status":"ok"}"""
@@ -765,10 +944,13 @@ class MainActivity : AppCompatActivity() {
                                 .controls { background: #1a202c; padding: 20px; border-radius: 12px; max-width: 960px; margin: 20px auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; text-align: left; }
                                 .control-group { border: 1px solid #2d3748; padding: 15px; border-radius: 8px; }
                                 .control-group h3 { margin-top: 0; color: #6366f1; font-size: 14px; text-transform: uppercase; }
+                                .control-group p { font-size: 12px; color: #718096; margin-top: 5px; }
                                 button { background: #2d3748; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin: 4px; transition: background 0.2s; }
                                 button:hover { background: #4a5568; }
                                 button.active { background: #6366f1; }
+                                button:disabled { opacity: 0.3; cursor: not-allowed; }
                                 input[type=range] { width: 100%; margin-top: 10px; }
+                                input[type=range]:disabled { opacity: 0.3; }
                                 .status { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
                                 .status-live { background: #c53030; color: white; }
                             </style>
@@ -784,36 +966,102 @@ class MainActivity : AppCompatActivity() {
                             <div class="controls">
                                 <div class="control-group">
                                     <h3>Focus Mode</h3>
-                                    <button onclick="ctrl('focus_mode=0', this)" class="focus-btn">Auto</button>
-                                    <button onclick="ctrl('focus_mode=1', this)" class="focus-btn">Tap</button>
-                                    <button onclick="ctrl('focus_mode=2', this)" class="focus-btn">Manual</button>
+                                    <button onclick="ctrl('focus_mode=0', this)" class="focus-btn" id="f0">Auto</button>
+                                    <button onclick="ctrl('focus_mode=2', this)" class="focus-btn" id="f2">Manual</button>
+                                    <p id="focusSupport">Checking support...</p>
                                 </div>
                                 <div class="control-group">
                                     <h3>Manual Focus</h3>
-                                    <input type="range" min="0" max="1000" value="0" oninput="ctrl('focus_mode=2&focus_distance=' + this.value)">
+                                    <input type="range" id="focusDist" min="0" max="1000" value="0" oninput="ctrl('focus_mode=2&focus_distance=' + this.value)">
                                 </div>
                                 <div class="control-group">
                                     <h3>Camera</h3>
-                                    <button onclick="ctrl('flip=false')">Back</button>
-                                    <button onclick="ctrl('flip=true')">Front</button>
+                                    <button onclick="ctrl('flip=false', this)" class="cam-btn" id="c_false">Back</button>
+                                    <button onclick="ctrl('flip=true', this)" class="cam-btn" id="c_true">Front</button>
                                 </div>
                                 <div class="control-group">
                                     <h3>Resolution</h3>
-                                    <button onclick="ctrl('resolution=0')">480p</button>
-                                    <button onclick="ctrl('resolution=1')">720p</button>
-                                    <button onclick="ctrl('resolution=2')">1080p</button>
+                                    <div id="resolutionList">
+                                        <!-- Dynamic resolution buttons -->
+                                    </div>
                                 </div>
                             </div>
 
                             <script>
+                                let currentResolutions = [];
+
                                 function ctrl(query, btn) {
                                     fetch('/control?' + query).then(r => r.json()).then(data => {
-                                        if (btn && btn.classList.contains('focus-btn')) {
-                                            document.querySelectorAll('.focus-btn').forEach(b => b.classList.remove('active'));
+                                        if (btn) {
+                                            const cls = btn.classList[0];
+                                            document.querySelectorAll('.' + cls).forEach(b => b.classList.remove('active'));
                                             btn.classList.add('active');
+                                        }
+                                        updateStatus();
+                                    });
+                                }
+
+                                function updateFeatures() {
+                                    fetch('/features').then(r => r.json()).then(data => {
+                                        const resList = document.getElementById('resolutionList');
+                                        const focusSupport = document.getElementById('focusSupport');
+                                        const focusDist = document.getElementById('focusDist');
+                                        const f2Btn = document.getElementById('f2');
+
+                                        // Update manual focus support UI
+                                        if (data.manual_focus) {
+                                            focusSupport.textContent = "Manual focus supported";
+                                            focusSupport.style.color = "#48bb78";
+                                            focusDist.disabled = false;
+                                            f2Btn.disabled = false;
+                                        } else {
+                                            focusSupport.textContent = "Fixed focus camera";
+                                            focusSupport.style.color = "#f56565";
+                                            focusDist.disabled = true;
+                                            f2Btn.disabled = true;
+                                        }
+
+                                        // Update resolution buttons if list changed
+                                        if (JSON.stringify(data.resolutions) !== JSON.stringify(currentResolutions)) {
+                                            currentResolutions = data.resolutions;
+                                            resList.innerHTML = '';
+                                            data.resolutions.forEach((res, index) => {
+                                                const btn = document.createElement('button');
+                                                btn.textContent = res;
+                                                btn.className = 'res-btn';
+                                                btn.id = 'res_' + res;
+                                                btn.onclick = () => ctrl('resolution_str=' + res, btn);
+                                                resList.appendChild(btn);
+                                            });
                                         }
                                     });
                                 }
+
+                                function updateStatus() {
+                                    fetch('/settings').then(r => r.json()).then(data => {
+                                        document.querySelectorAll('.focus-btn').forEach(b => b.classList.remove('active'));
+                                        if(document.getElementById('f'+data.focus_mode)) document.getElementById('f'+data.focus_mode).classList.add('active');
+                                        
+                                        document.getElementById('focusDist').value = data.focus_distance;
+                                        
+                                        document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+                                        if(document.getElementById('c_'+data.flip)) document.getElementById('c_'+data.flip).classList.add('active');
+                                        
+                                        document.querySelectorAll('.res-btn').forEach(b => {
+                                            b.classList.toggle('active', b.textContent === data.resolution_str);
+                                        });
+                                    });
+                                }
+
+                                // Initial load
+                                updateFeatures();
+                                updateStatus();
+
+                                // Periodic sync
+                                setInterval(() => {
+                                    updateFeatures();
+                                    updateStatus();
+                                }, 5000);
 
                                 const img = document.getElementById('stream');
                                 const status = document.getElementById('connectionStatus');
@@ -834,6 +1082,42 @@ class MainActivity : AppCompatActivity() {
                 }
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not Found")
             }
+        }
+    }
+
+    private fun getCameraFeatures(front: Boolean): String {
+        val manager = getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        try {
+            val cameraId = manager.cameraIdList.firstOrNull { id ->
+                val chars = manager.getCameraCharacteristics(id)
+                val facing = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+                if (front) facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+                else facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+            } ?: manager.cameraIdList.firstOrNull() ?: return "{}"
+
+            val chars = manager.getCameraCharacteristics(cameraId)
+            val map = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val resolutions = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            val resList = resolutions.map { "${it.width}x${it.height}" }.distinct()
+                .sortedByDescending { 
+                    val parts = it.split("x")
+                    if (parts.size == 2) parts[0].toInt() * parts[1].toInt() else 0
+                }
+            
+            val minFocusDist = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+            val manualFocusSupported = (minFocusDist != null && minFocusDist > 0)
+
+            val resJson = resList.joinToString(",") { "\"$it\"" }
+            
+            return """
+                {
+                    "resolutions": [$resJson],
+                    "manual_focus": $manualFocusSupported,
+                    "camera": "${if (front) "front" else "back"}"
+                }
+            """.trimIndent()
+        } catch (e: Exception) {
+            return """{"error": "${e.message}"}"""
         }
     }
 

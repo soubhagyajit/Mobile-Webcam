@@ -12,6 +12,14 @@
         android:layout_height="match_parent"
         app:scaleType="fillCenter" />
 
+    <!-- Focus Ring Indicator -->
+    <ImageView
+        android:id="@+id/focusRing"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:src="@drawable/focus_ring"
+        android:visibility="invisible" />
+
     <!-- Focus Controls -->
     <LinearLayout
         android:layout_width="wrap_content"
