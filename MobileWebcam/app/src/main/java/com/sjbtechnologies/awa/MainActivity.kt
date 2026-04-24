@@ -60,10 +60,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dimOverlay: View
     private lateinit var focusRing: ImageView
     
+    private lateinit var expButton: TextView
     private lateinit var focusAutoButton: TextView
     private lateinit var focusTapButton: TextView
     private lateinit var focusManualButton: TextView
+    private lateinit var focusContainer: View
     private lateinit var focusSeekBar: SeekBar
+    private lateinit var exposureContainer: View
+    private lateinit var exposureSeekBar: SeekBar
+    private lateinit var gestureDetector: android.view.GestureDetector
     
     private var focusMode = 0 // 0: Auto, 1: Tap, 2: Manual
     
@@ -129,11 +134,30 @@ class MainActivity : AppCompatActivity() {
         dimOverlay = findViewById(R.id.dimOverlay)
         focusRing = findViewById(R.id.focusRing)
         
+        expButton = findViewById(R.id.expButton)
         focusAutoButton = findViewById(R.id.focusAutoButton)
         focusTapButton = findViewById(R.id.focusTapButton)
         focusManualButton = findViewById(R.id.focusManualButton)
+        focusContainer = findViewById(R.id.focusContainer)
         focusSeekBar = findViewById(R.id.focusSeekBar)
+        exposureContainer = findViewById(R.id.exposureContainer)
+        exposureSeekBar = findViewById(R.id.exposureSeekBar)
         focusSeekBar.max = 1000
+        
+        expButton.setOnClickListener {
+            exposureContainer.visibility = if (exposureContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
+        
+        gestureDetector = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
+                handleFocusTap(e.x, e.y, lock = false)
+                return true
+            }
+            override fun onLongPress(e: android.view.MotionEvent) {
+                handleFocusTap(e.x, e.y, lock = true)
+                Toast.makeText(this@MainActivity, "AE/AF Locked", Toast.LENGTH_SHORT).show()
+            }
+        })
 
         focusAutoButton.setOnClickListener { setFocusMode(0) }
         focusTapButton.setOnClickListener { setFocusMode(1) }
@@ -268,7 +292,7 @@ class MainActivity : AppCompatActivity() {
         focusManualButton.setTextColor(if (mode == 2) activeColor else inactiveColor)
         focusManualButton.alpha = if (mode == 2) activeAlpha else inactiveAlpha
         
-        focusSeekBar.visibility = if (mode == 2) View.VISIBLE else View.GONE
+        focusContainer.visibility = if (mode == 2) View.VISIBLE else View.GONE
         
         applyCurrentFocusMode()
     }
@@ -279,30 +303,26 @@ class MainActivity : AppCompatActivity() {
         val camera2CameraControl = Camera2CameraControl.from(currentCamera.cameraControl)
         
         try {
-            val builder = CaptureRequestOptions.Builder()
-            
-            // Explicitly set CONTROL_MODE to ensure overrides are respected
-            builder.setCaptureRequestOption(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-
-            when (focusMode) {
-                0 -> { // Auto (Continuous)
-                    Log.d(TAG, "Applying Real-time Focus: Auto")
-                    builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                }
-                1 -> { // Tap (Single AF)
+            if (focusMode == 2) {
+                // Manual mode: explicitly override AF_MODE and set focus distance via Camera2Interop
+                val builder = CaptureRequestOptions.Builder()
+                builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                val focusDistance = focusSeekBar.progress / 100f
+                Log.d(TAG, "Applying Real-time Focus: Manual ($focusDistance)")
+                builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
+                camera2CameraControl.captureRequestOptions = builder.build()
+            } else {
+                // Auto/Tap mode: Clear interop overrides to let CameraX handle the state machine natively
+                camera2CameraControl.clearCaptureRequestOptions()
+                
+                if (focusMode == 0) {
+                    Log.d(TAG, "Applying Real-time Focus: Auto (Continuous)")
+                    // Cancel any active tap-focus metering to restore continuous auto-focus
+                    currentCamera.cameraControl.cancelFocusAndMetering()
+                } else {
                     Log.d(TAG, "Applying Real-time Focus: Tap/Manual-AF")
-                    builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
-                }
-                2 -> { // Manual
-                    // Focus distance is 0.0 (infinity) to 10.0+ (macro) depending on device
-                    val focusDistance = focusSeekBar.progress / 100f
-                    Log.d(TAG, "Applying Real-time Focus: Manual ($focusDistance)")
-                    builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                    builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
                 }
             }
-            // Use setCaptureRequestOptions to ensure we are the sole controller of these values for this session
-            camera2CameraControl.captureRequestOptions = builder.build()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to apply focus mode", e)
         }
@@ -344,6 +364,13 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         applyImmersiveMode()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            applyImmersiveMode()
+        }
     }
 
     private fun applyImmersiveMode() {
@@ -531,27 +558,9 @@ class MainActivity : AppCompatActivity() {
             it.setSurfaceProvider(previewView.surfaceProvider)
         }
 
-        previewView.setOnTouchListener { v, event ->
-            if (event.action == android.view.MotionEvent.ACTION_UP) {
-                // Show visual focus ring
-                showFocusRing(event.x, event.y)
-
-                if (focusMode == 0) {
-                    setFocusMode(1) // Switch to Tap mode on touch
-                }
-
-                if (focusMode == 1) {
-                    val factory = previewView.meteringPointFactory
-                    val point = factory.createPoint(event.x, event.y)
-                    val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
-                        .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
-                        .build()
-                    Log.d(TAG, "Triggering tap-to-focus")
-                    camera?.cameraControl?.startFocusAndMetering(action)
-                }
-                v.performClick()
-                true
-            } else false
+        previewView.setOnTouchListener { _, event ->
+            gestureDetector.onTouchEvent(event)
+            true
         }
 
         val imageAnalyzer = analysisBuilder.build()
@@ -576,6 +585,37 @@ class MainActivity : AppCompatActivity() {
                 preview,
                 imageAnalyzer
             )
+            
+            // Setup exposure slider
+            camera?.cameraInfo?.exposureState?.let { exposureState ->
+                val range = exposureState.exposureCompensationRange
+                if (range.lower != range.upper) {
+                    runOnUiThread {
+                        expButton.visibility = View.VISIBLE
+                        // Hide by default, user can toggle it via expButton
+                        exposureContainer.visibility = View.GONE
+                        exposureSeekBar.max = range.upper - range.lower
+                        exposureSeekBar.progress = exposureState.exposureCompensationIndex - range.lower
+                        
+                        exposureSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                                if (fromUser) {
+                                    val index = progress + range.lower
+                                    camera?.cameraControl?.setExposureCompensationIndex(index)
+                                }
+                            }
+                            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                        })
+                    }
+                } else {
+                    runOnUiThread { 
+                        expButton.visibility = View.GONE
+                        exposureContainer.visibility = View.GONE 
+                    }
+                }
+            }
+
             // Re-apply focus mode settings to the new session
             previewView.post {
                 applyCurrentFocusMode()
@@ -677,7 +717,14 @@ class MainActivity : AppCompatActivity() {
 
             val chars = manager.getCameraCharacteristics(cameraId)
             val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val resolutions = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            val yuvSizes = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            val videoSizes = map?.getOutputSizes(android.media.MediaRecorder::class.java) ?: emptyArray()
+            
+            // Filter to only include sizes that are officially supported for continuous video recording
+            val validSizes = yuvSizes.filter { yuvSize -> 
+                videoSizes.any { it.width == yuvSize.width && it.height == yuvSize.height }
+            }
+            val resolutions = if (validSizes.isNotEmpty()) validSizes else yuvSizes.toList()
             
             // Common useful resolutions or all if needed. Let's filter to keep it sane or just show top 10
             val resList = resolutions.map { "${it.width}x${it.height}" }.distinct()
@@ -774,7 +821,7 @@ class MainActivity : AppCompatActivity() {
         if (width > 0 && height > 0) {
             val factory = previewView.meteringPointFactory
             val centerPoint = factory.createPoint(width / 2f, height / 2f)
-            val action = FocusMeteringAction.Builder(centerPoint, FocusMeteringAction.FLAG_AF)
+            val action = FocusMeteringAction.Builder(centerPoint, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
                 .setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
             camera?.cameraControl?.startFocusAndMetering(action)
@@ -805,6 +852,26 @@ class MainActivity : AppCompatActivity() {
             .setDuration(500)
             .withEndAction { focusRing.visibility = View.INVISIBLE }
             .start()
+    }
+
+    private fun handleFocusTap(x: Float, y: Float, lock: Boolean) {
+        showFocusRing(x, y)
+        if (focusMode == 0) {
+            setFocusMode(1) // Switch to Tap mode on touch
+        }
+        if (focusMode == 1) {
+            val factory = previewView.meteringPointFactory
+            val point = factory.createPoint(x, y)
+            val builder = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            if (lock) {
+                builder.disableAutoCancel()
+                Log.d(TAG, "Triggering tap-to-focus (LOCKED)")
+            } else {
+                builder.setAutoCancelDuration(5, java.util.concurrent.TimeUnit.SECONDS)
+                Log.d(TAG, "Triggering tap-to-focus (AUTO-CANCEL)")
+            }
+            camera?.cameraControl?.startFocusAndMetering(builder.build())
+        }
     }
 
     inner class VideoServer(port: Int) : NanoHTTPD(port) {
@@ -881,10 +948,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 session.uri == "/settings" -> {
                     val resStr = resolutionSpinner.selectedItem?.toString() ?: "Unknown"
+                    val expIndex = camera?.cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
                     val settings = """
                         {
                             "focus_mode": $focusMode,
                             "focus_distance": ${focusSeekBar.progress},
+                            "exposure_index": $expIndex,
                             "flip": $isFrontCamera,
                             "resolution_str": "$resStr"
                         }
@@ -913,6 +982,16 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread { 
                             focusSeekBar.progress = dist
                             updateManualFocus(dist)
+                        }
+                    }
+
+                    params["exposure_index"]?.firstOrNull()?.toIntOrNull()?.let { exp ->
+                        camera?.cameraControl?.setExposureCompensationIndex(exp)
+                        runOnUiThread {
+                            camera?.cameraInfo?.exposureState?.let { state ->
+                                val lower = state.exposureCompensationRange.lower
+                                exposureSeekBar.progress = exp - lower
+                            }
                         }
                     }
 
@@ -975,6 +1054,10 @@ class MainActivity : AppCompatActivity() {
                                     <input type="range" id="focusDist" min="0" max="1000" value="0" oninput="ctrl('focus_mode=2&focus_distance=' + this.value)">
                                 </div>
                                 <div class="control-group">
+                                    <h3>Exposure</h3>
+                                    <input type="range" id="exposureDist" min="0" max="0" value="0" oninput="ctrl('exposure_index=' + this.value)">
+                                </div>
+                                <div class="control-group">
                                     <h3>Camera</h3>
                                     <button onclick="ctrl('flip=false', this)" class="cam-btn" id="c_false">Back</button>
                                     <button onclick="ctrl('flip=true', this)" class="cam-btn" id="c_true">Front</button>
@@ -1021,6 +1104,16 @@ class MainActivity : AppCompatActivity() {
                                             f2Btn.disabled = true;
                                         }
 
+                                        // Update exposure
+                                        const expInput = document.getElementById('exposureDist');
+                                        if (data.exposure_lower !== data.exposure_upper) {
+                                            expInput.min = data.exposure_lower;
+                                            expInput.max = data.exposure_upper;
+                                            expInput.disabled = false;
+                                        } else {
+                                            expInput.disabled = true;
+                                        }
+
                                         // Update resolution buttons if list changed
                                         if (JSON.stringify(data.resolutions) !== JSON.stringify(currentResolutions)) {
                                             currentResolutions = data.resolutions;
@@ -1043,6 +1136,7 @@ class MainActivity : AppCompatActivity() {
                                         if(document.getElementById('f'+data.focus_mode)) document.getElementById('f'+data.focus_mode).classList.add('active');
                                         
                                         document.getElementById('focusDist').value = data.focus_distance;
+                                        document.getElementById('exposureDist').value = data.exposure_index;
                                         
                                         document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
                                         if(document.getElementById('c_'+data.flip)) document.getElementById('c_'+data.flip).classList.add('active');
@@ -1097,7 +1191,15 @@ class MainActivity : AppCompatActivity() {
 
             val chars = manager.getCameraCharacteristics(cameraId)
             val map = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val resolutions = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            val yuvSizes = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
+            val videoSizes = map?.getOutputSizes(android.media.MediaRecorder::class.java) ?: emptyArray()
+            
+            // Filter to only include sizes that are officially supported for continuous video recording
+            val validSizes = yuvSizes.filter { yuvSize -> 
+                videoSizes.any { it.width == yuvSize.width && it.height == yuvSize.height }
+            }
+            val resolutions = if (validSizes.isNotEmpty()) validSizes else yuvSizes.toList()
+
             val resList = resolutions.map { "${it.width}x${it.height}" }.distinct()
                 .sortedByDescending { 
                     val parts = it.split("x")
@@ -1107,12 +1209,20 @@ class MainActivity : AppCompatActivity() {
             val minFocusDist = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
             val manualFocusSupported = (minFocusDist != null && minFocusDist > 0)
 
+            val aeRange = chars.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            val expLower = aeRange?.lower ?: 0
+            val expUpper = aeRange?.upper ?: 0
+            val expStep = chars.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+
             val resJson = resList.joinToString(",") { "\"$it\"" }
             
             return """
                 {
                     "resolutions": [$resJson],
                     "manual_focus": $manualFocusSupported,
+                    "exposure_lower": $expLower,
+                    "exposure_upper": $expUpper,
+                    "exposure_step": $expStep,
                     "camera": "${if (front) "front" else "back"}"
                 }
             """.trimIndent()

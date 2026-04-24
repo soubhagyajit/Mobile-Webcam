@@ -294,8 +294,8 @@ app.on('before-quit', () => {
 });
 
 console.log(`
-╔═══════════════════════════════════════════════════╗
-║   Mobile Webcam Desktop Client                    ║
-║   Auto-installer enabled                          ║
-╚═══════════════════════════════════════════════════╝
+.---------------------------------------------------.
+|   Mobile Webcam Desktop Client                    |
+|   Auto-installer enabled                          |
+'---------------------------------------------------'
 `);

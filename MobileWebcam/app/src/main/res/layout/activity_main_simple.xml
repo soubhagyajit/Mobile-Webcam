@@ -20,6 +20,23 @@
         android:src="@drawable/focus_ring"
         android:visibility="invisible" />
 
+    <!-- Exposure Vertical Slider -->
+    <FrameLayout
+        android:id="@+id/exposureContainer"
+        android:layout_width="48dp"
+        android:layout_height="240dp"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginStart="16dp"
+        android:background="#80000000"
+        android:visibility="gone">
+        <SeekBar
+            android:id="@+id/exposureSeekBar"
+            android:layout_width="200dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:rotation="270" />
+    </FrameLayout>
+
     <!-- Focus Controls -->
     <LinearLayout
         android:layout_width="wrap_content"
@@ -69,16 +86,40 @@
             android:background="?attr/selectableItemBackgroundBorderless"/>
     </LinearLayout>
 
-    <!-- Horizontal Manual Focus Slider -->
-    <SeekBar
-        android:id="@+id/focusSeekBar"
+    <!-- Sliders Container -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:layout_marginBottom="120dp"
         android:layout_marginStart="50dp"
         android:layout_marginEnd="50dp"
-        android:visibility="gone" />
+        android:orientation="vertical">
+
+        <!-- Focus Slider -->
+        <LinearLayout
+            android:id="@+id/focusContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#80000000"
+            android:padding="8dp"
+            android:visibility="gone">
+            <TextView
+                android:layout_width="36dp"
+                android:layout_height="wrap_content"
+                android:text="FOC"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+            <SeekBar
+                android:id="@+id/focusSeekBar"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+        </LinearLayout>
+    </LinearLayout>
 
     <!-- Minimal Top Info -->
     <LinearLayout
@@ -105,6 +146,21 @@
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/expButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:text="EXP"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="?attr/selectableItemBackground"
+            android:padding="4dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/ipAddressText"

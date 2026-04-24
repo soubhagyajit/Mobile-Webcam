@@ -33,6 +33,26 @@
       box-shadow: 0 0 50px -12px rgba(99, 102, 241, 0.3);
     }
   </style>
+  <style>
+    /* Custom Scrollbar Styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background-color: #334155; /* tailwind slate-700 */
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background-color: #475569; /* tailwind slate-600 */
+    }
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+  </style>
 </head>
 <body>
 
@@ -106,6 +126,18 @@
             </div>
           </div>
         </div>
+
+        <div id="exposureContainer" class="space-y-2 pt-2 border-t border-slate-800/50">
+          <div class="flex justify-between items-center mb-1">
+            <span class="text-[10px] text-slate-500 font-bold uppercase">Exposure</span>
+            <span id="exposureValue" class="text-[9px] text-brand-400 font-mono">0</span>
+          </div>
+          <input type="range" id="exposureSlider" min="0" max="0" value="0" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500 disabled:opacity-30 disabled:cursor-not-allowed">
+          <div class="flex justify-between text-[8px] text-slate-500 uppercase">
+            <span>Darker</span>
+            <span>Brighter</span>
+          </div>
+        </div>
       </div>
 
       <div class="space-y-3 pt-2 border-t border-slate-800">
@@ -118,7 +150,7 @@
         </button>
       </div>
 
-      <div class="mt-auto p-4 bg-slate-900/80 rounded-xl border border-slate-800/50">
+      <div class="mt-auto p-4 bg-slate-900/80 rounded-xl border border-slate-800/50 shrink-0">
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs text-slate-500">Status</span>
           <span id="modeIndicator" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase">Standby</span>
@@ -182,6 +214,10 @@
     const manualFocusCont = document.getElementById('manualFocusCont');
     const manualFocusOption = document.getElementById('manualFocusOption');
     const focusSupportMsg = document.getElementById('focusSupportMsg');
+    
+    // Exposure Elements
+    const exposureSlider = document.getElementById('exposureSlider');
+    const exposureValue = document.getElementById('exposureValue');
     const refreshSettingsBtn = document.getElementById('refreshSettingsBtn');
     
     let isConnected = false;
@@ -244,16 +280,16 @@
             
             deviceFeatures = await response.json();
             
-            // Populate resolution dropdown with ACTUAL strings as values
+            // Populate resolutions
             resSelect.innerHTML = '';
             deviceFeatures.resolutions.forEach((res) => {
                 const option = document.createElement('option');
-                option.value = res; // Using string
+                option.value = res;
                 option.textContent = res;
                 resSelect.appendChild(option);
             });
             
-            // Handle Manual Focus Support UI
+            // Focus Support UI
             focusSupportMsg.classList.remove('hidden');
             if (deviceFeatures.manual_focus) {
                 focusSupportMsg.textContent = "Manual focus supported";
@@ -267,8 +303,18 @@
                 manualFocusOption.disabled = true;
                 focusMode.value = "0"; // Force auto
             }
+
+            // Exposure Support UI
+            if (deviceFeatures.exposure_lower !== undefined && deviceFeatures.exposure_upper !== undefined) {
+                if (deviceFeatures.exposure_lower !== deviceFeatures.exposure_upper) {
+                    exposureSlider.min = deviceFeatures.exposure_lower;
+                    exposureSlider.max = deviceFeatures.exposure_upper;
+                    exposureSlider.disabled = false;
+                } else {
+                    exposureSlider.disabled = true;
+                }
+            }
             
-            // Set initial camera toggle state
             isFrontCamera = (deviceFeatures.camera === 'front');
             updateFlipButtonText(deviceFeatures.camera);
             
@@ -304,13 +350,18 @@
         
         // Sync Focus
         focusMode.value = deviceSettings.focus_mode.toString();
-        
         if (deviceSettings.focus_mode === 2) {
             manualFocusCont.classList.remove('hidden');
             focusDist.value = deviceSettings.focus_distance;
             focusDistValue.textContent = deviceSettings.focus_distance;
         } else {
             manualFocusCont.classList.add('hidden');
+        }
+
+        // Sync Exposure
+        if (deviceSettings.exposure_index !== undefined) {
+            exposureSlider.value = deviceSettings.exposure_index;
+            exposureValue.textContent = deviceSettings.exposure_index;
         }
     }
 
@@ -325,17 +376,14 @@
     async function initializeDeviceSync() {
         await fetchFeatures();
         await fetchSettings();
-        syncInterval = setInterval(fetchSettings, 5000); // Polling every 5s like the test script
+        syncInterval = setInterval(fetchSettings, 5000); // Polling
     }
 
     // --- Main Connection Flow ---
 
     toggleConnectBtn.addEventListener('click', () => {
-        if (isConnected) {
-            disconnect();
-        } else {
-            connect();
-        }
+        if (isConnected) disconnect();
+        else connect();
     });
 
     function connect() {
@@ -354,7 +402,6 @@
         videoStream.classList.remove('hidden');
         videoStreamDiv.classList.remove('hidden');
         
-        // Update Toggle Button UI for Disconnect
         toggleConnectBtn.disabled = false;
         toggleConnectBtn.className = BTN_DISCONNECT_STYLE;
         toggleConnectBtnText.textContent = "Disconnect";
@@ -385,7 +432,6 @@
       videoStreamDiv.classList.add('hidden');
       placeholder.classList.remove('hidden');
       
-      // Update Toggle Button UI for Connect
       toggleConnectBtn.disabled = false;
       toggleConnectBtn.className = BTN_CONNECT_STYLE;
       toggleConnectBtnText.textContent = "Connect Device";
@@ -418,7 +464,6 @@
     });
 
     resSelect.addEventListener('change', (e) => {
-        // Send using resolution_str as requested by the test script
         sendControl(`resolution_str=${encodeURIComponent(e.target.value)}`);
     });
 
@@ -433,8 +478,16 @@
         focusDistValue.textContent = e.target.value;
         clearTimeout(focusTimeout);
         focusTimeout = setTimeout(() => {
-            // Updated to bundle focus_mode=2 with distance adjust just in case
             sendControl(`focus_mode=2&focus_distance=${e.target.value}`);
+        }, 100);
+    });
+
+    let exposureTimeout;
+    exposureSlider.addEventListener('input', (e) => {
+        exposureValue.textContent = e.target.value;
+        clearTimeout(exposureTimeout);
+        exposureTimeout = setTimeout(() => {
+            sendControl(`exposure_index=${e.target.value}`);
         }, 100);
     });
 
