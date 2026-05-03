@@ -5,7 +5,7 @@
  * the Free Software Foundation, either version 3 of the License.
  */
 
-const { app, BrowserWindow, ipcMain,Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, shell } = require('electron');
 const path = require('path');
 const { exec } = require('child_process');
 const virtualCamera = require('./virtualCamera');
@@ -15,12 +15,13 @@ let mainWindow = null;
 let viewWindow = null;
 let installWindow = null;
 
+// ─── Window creation ──────────────────────────────────────────────────────────
+
 async function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
         title: 'Mobile Webcam',
-        // autoHideMenuBar:true,
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
@@ -28,178 +29,187 @@ async function createWindow() {
     });
 
     mainWindow.loadFile('index.html');
-    
-    // Setup ADB
-    setupAdb();
-    
-    // Setup virtual camera IPC
+
     virtualCamera.setupVirtualCameraIPC();
-    
-    // Check if setup is needed
+
+    await setupAdb();
     await checkAndSetupComponents();
 }
 
+// ─── ADB ──────────────────────────────────────────────────────────────────────
+
 async function isAdbAvailable() {
     return new Promise((resolve) => {
-        exec('adb --version', (error) => {
-            if (error) {
-                resolve(false);
-            } else {
-                resolve(true);
-            }
-        });
+        exec('adb --version', (error) => resolve(!error));
     });
 }
 
 async function setupAdb() {
     const adbPresent = await isAdbAvailable();
-    
+
     if (!adbPresent) {
-        console.log('ADB not found. USB mode will be disabled, but WiFi mode is ready.');
+        console.log('[ADB] Not found — USB mode disabled, WiFi mode ready.');
         showAdbInstructions(1);
-        return; // Exit quietly - no dialog!
+        return;
     }
-    exec('adb forward tcp:8080 tcp:8080', (error, stdout, stderr) => {
+
+    exec('adb forward tcp:8080 tcp:8080', (error) => {
         if (error) {
-            console.error(`ADB Error: ${error.message}`);
-            // Show ADB installation dialog if needed
+            console.error(`[ADB] Forward error: ${error.message}`);
             showAdbInstructions(2);
-            return;
+        } else {
+            console.log('[ADB] ✓ Port forwarding active: 8080 → 8080');
         }
-        console.log('✓ ADB Forwarding successful: 8080 -> 8080');
     });
 }
 
 function showAdbInstructions(ins) {
-    const { dialog } = require('electron');
-    let text = "";
-    let tle = "";
-    let msg = "";
-    if(ins == 1){
-        tle="ADB not Found";
-        msg = "Android Debug Bridge (ADB) is not installed";
-        text='For USB mode, you need ADB.\n\n' +
-                'Install Android Studio or Platform Tools:\n' +
-                'https://developer.android.com/studio/releases/platform-tools\n\n' +
-                'WiFi mode will still work without ADB.';
-    }
-    else if (ins == 2){
-        tle="Connection error";
-        msg = "Device not Found";
-        text="Can't connect to device, make sure USB is properly connected. Ignore it if you want to use wifi.";
-    }
+    const configs = {
+        1: {
+            title: 'ADB Not Found',
+            message: 'Android Debug Bridge (ADB) is not installed',
+            detail: 'For USB mode, you need ADB.\n\n' +
+                    'Install Android Platform Tools:\n' +
+                    'https://developer.android.com/studio/releases/platform-tools\n\n' +
+                    'WiFi mode will still work without ADB.'
+        },
+        2: {
+            title: 'Connection Error',
+            message: 'Device Not Found',
+            detail: "Can't connect to device — make sure USB is properly connected.\n" +
+                    'You can ignore this if you want to use WiFi mode.'
+        }
+    };
+
+    const cfg = configs[ins];
+    if (!cfg || !mainWindow) return;
+
     dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: tle,
-        message: msg,
-        detail: text,
+        title: cfg.title,
+        message: cfg.message,
+        detail: cfg.detail,
         buttons: ['OK']
     });
 }
 
+// ─── Component setup ──────────────────────────────────────────────────────────
+
 async function checkAndSetupComponents() {
     try {
-        // Check if Python and pyvirtualcamera is installed
-        const pythonInstalled = await autoInstaller.checkPython();
-        const checkPyvirtualcam = await autoInstaller.checkPyvirtualcam();
-        console.log(`[Status] Python: ${pythonInstalled ? 'OK' : 'MISSING'}`);
-        console.log(`[Status] Driver: ${checkPyvirtualcam ? 'OK' : 'MISSING'}`);
-        if (!pythonInstalled || !checkPyvirtualcam) {
-            // Show setup dialog
-            const choice = await autoInstaller.showSetupDialog(mainWindow, pythonInstalled, checkPyvirtualcam);
-            
-            if (choice === 0) {
-                // User chose automatic installation
-                startAutoInstall();
-                // if (!pythonInstalled){autoInstaller.installPython();}
-                // if (!checkPyvirtualcam){autoInstaller.installPyvirtualcam();}
+        // Quick pre-checks so we can decide whether to prompt at all
+        const { ok: filesOk, missing } = autoInstaller.checkRequiredFiles();
+        const vcRedistOk = await autoInstaller.checkVcRedist();
+        const softcamOk  = await autoInstaller.checkSoftcamRegistered();
 
-            } else if (choice === 2) {
-                // User chose manual instructions
-                showManualInstructions();
-            }
-            // choice === 1 means skip
-        } else {
-            console.log('✓ All components already installed');
+        console.log(`[Status] Required files : ${filesOk   ? 'OK' : 'MISSING — ' + missing.join(', ')}`);
+        console.log(`[Status] MSVC runtime   : ${vcRedistOk ? 'OK' : 'MISSING'}`);
+        console.log(`[Status] softcam driver : ${softcamOk  ? 'OK' : 'NOT REGISTERED'}`);
+
+        // If files are missing there's nothing the installer can do — tell the user to reinstall
+        if (!filesOk) {
+            dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                title: 'Installation Corrupted',
+                message: 'Required files are missing',
+                detail: `The following files are missing from the application folder:\n\n` +
+                        missing.map(f => `• ${f}`).join('\n') +
+                        '\n\nPlease reinstall Mobile Webcam.',
+                buttons: ['OK']
+            });
+            return;
         }
+
+        // Everything already good — nothing to do
+        if (vcRedistOk && softcamOk) {
+            console.log('[Setup] ✓ All components ready');
+            return;
+        }
+
+        // Ask the user
+        const choice = await autoInstaller.showSetupDialog(mainWindow);
+
+        if (choice === 0) {
+            startAutoInstall();
+        } else if (choice === 2) {
+            showManualInstructions();
+        }
+        // choice === 1 → user skipped
+
     } catch (error) {
-        console.error('Setup check error:', error);
+        console.error('[Setup] Check error:', error);
     }
 }
 
 function startAutoInstall() {
+    // Don't open a second install window if one is already open
+    if (installWindow) {
+        installWindow.focus();
+        return;
+    }
+
     installWindow = new BrowserWindow({
         width: 480,
         height: 640,
-        resizable: true,
+        resizable: false,
         frame: false,
         parent: mainWindow,
         modal: true,
         webPreferences: {
             nodeIntegration: true,
-            contextIsolation: false
+            contextIsolation: false,
         }
     });
-    
+
     installWindow.loadFile('installer.html');
-    
+
     installWindow.on('closed', () => {
         installWindow = null;
     });
 }
 
 function showManualInstructions() {
-    const { shell } = require('electron');
-    const { dialog } = require('electron');
-    
     dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: 'Manual Installation Instructions',
+        title: 'Manual Setup Instructions',
         message: 'Virtual Camera Setup',
-        detail: 'Please install these components manually:\n\n' +
-                '1. Python (v3.10 or higher):\n' +
-                '   https://www.python.org/downloads/\n' +
-                '   *IMPORTANT: Check "Add Python to PATH" during installation.*\n\n' +
-                
-                '2. Virtual Camera Driver:\n' +
-                '   • Windows/Mac: Install OBS Studio\n' +
-                '     https://obsproject.com/download\n' +
-                '   • Linux: Install v4l2loopback\n' +
-                '     sudo apt install v4l2loopback-dkms\n\n' +
-                
-                '3. Required Python Libraries:\n' +
-                '   Open terminal/command prompt and run:\n' +
-                '   pip install opencv-python pyvirtualcam requests numpy\n\n' +
-                
-                'Restart the app after installation.',
-        buttons: ['Open Python Website','Virtual Camera Driver','Close']
+        detail: 'Mobile Webcam needs two things to work:\n\n' +
+                '1. Microsoft MSVC Runtime (VC++ 2022 x64)\n' +
+                '   Download and run vc_redist.x64.exe from Microsoft.\n\n' +
+                '2. Virtual Camera Driver (softcam.dll)\n' +
+                '   Open a Command Prompt as Administrator and run:\n' +
+                '   regsvr32 "<install folder>\\resources\\softcam.dll"\n\n' +
+                'Restart the app after completing these steps.',
+        buttons: ['Download VC++ Runtime', 'Close']
     }).then((result) => {
         if (result.response === 0) {
-            shell.openExternal('https://www.python.org/downloads');
-        }
-        if (result.response === 1) {
-            shell.openExternal('https://obsproject.com/download');
+            shell.openExternal('https://aka.ms/vs/17/release/vc_redist.x64.exe');
         }
     });
 }
 
-// IPC: Start auto installation
+// ─── IPC: Installer window ────────────────────────────────────────────────────
+
 ipcMain.on('start-auto-install', async (event) => {
     try {
-        const result = await autoInstaller.autoSetupPython((message, percent) => {
-            event.reply('install-progress', { message, percent });
+        const result = await autoInstaller.autoSetup((message, percent) => {
+            // Guard: installer window might have been closed mid-install
+            if (installWindow && !installWindow.isDestroyed()) {
+                event.reply('install-progress', { message, percent });
+            }
         });
-        
+
         event.reply('install-complete', result);
-        
-        // if (result.success) {
-        //     // Wait 2 seconds then close installer
-        //     setTimeout(() => {
-        //         if (installWindow) {
-        //             installWindow.close();
-        //         }
-        //     }, 2000);
-        // }
+
+        if (result.success && installWindow && !installWindow.isDestroyed()) {
+            // Give the UI a moment to show the success state before closing
+            setTimeout(() => {
+                if (installWindow && !installWindow.isDestroyed()) {
+                    installWindow.close();
+                }
+            }, 2000);
+        }
+
     } catch (error) {
         event.reply('install-complete', {
             success: false,
@@ -208,7 +218,12 @@ ipcMain.on('start-auto-install', async (event) => {
     }
 });
 
-// Feed window handlers
+ipcMain.on('reinstall-components', () => {
+    startAutoInstall();
+});
+
+// ─── IPC: Feed window ─────────────────────────────────────────────────────────
+
 ipcMain.on('open-feed-window', (event, streamUrl) => {
     if (viewWindow) {
         viewWindow.focus();
@@ -227,11 +242,8 @@ ipcMain.on('open-feed-window', (event, streamUrl) => {
         }
     });
 
-    viewWindow.loadFile('feed.html', { query: { "url": streamUrl } });
-
-    viewWindow.on('closed', () => {
-        viewWindow = null;
-    });
+    viewWindow.loadFile('feed.html', { query: { url: streamUrl } });
+    viewWindow.on('closed', () => { viewWindow = null; });
 });
 
 ipcMain.on('close-feed-window', () => {
@@ -251,42 +263,45 @@ ipcMain.on('resize-feed-window', (event, data) => {
     }
 });
 
-// Manual reinstall trigger
-ipcMain.on('reinstall-components', () => {
-    startAutoInstall();
-});
+// ─── App menu ─────────────────────────────────────────────────────────────────
 
 const menuTemplate = [
-  {
-    label: 'File',
-    submenu: [
-      { label: 'Installation Window', click: () => { startAutoInstall() } },
-      { type: 'separator' },
-      { role: 'quit' }
-    ]
-  },
-  {
-    label: 'Help',
-    submenu: [
-      { label: 'Website', click: async () => { 
-          const { shell } = require('electron');
-          await shell.openExternal('https://www.soubhagyajit.com');
-        } 
-      }
-    ]
-  }
+    {
+        label: 'File',
+        submenu: [
+            {
+                label: 'Run Setup Again',
+                click: () => startAutoInstall()
+            },
+            { type: 'separator' },
+            { role: 'quit' }
+        ]
+    },
+    {
+        label: 'Help',
+        submenu: [
+            {
+                label: 'Website',
+                click: () => shell.openExternal('https://www.soubhagyajit.com')
+            },
+            {
+                label: 'Manual Setup Instructions',
+                click: () => showManualInstructions()
+            }
+        ]
+    }
 ];
+
+// ─── App lifecycle ────────────────────────────────────────────────────────────
+
 app.whenReady().then(() => {
-  const menu = Menu.buildFromTemplate(menuTemplate);
-  Menu.setApplicationMenu(menu);
-  createWindow();
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+    createWindow();
 });
 
 app.on('window-all-closed', () => {
     virtualCamera.cleanupVirtualCamera();
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
@@ -296,6 +311,6 @@ app.on('before-quit', () => {
 console.log(`
 .---------------------------------------------------.
 |   Mobile Webcam Desktop Client                    |
-|   Auto-installer enabled                          |
+|   C++ Bridge + softcam — v3                       |
 '---------------------------------------------------'
 `);

@@ -35,7 +35,7 @@ async function startVirtualCamera(streamUrl, userWidth, userHeight, fps = 30) {
 
     try {
         const isDev = !app.isPackaged;
-        const baseDir = isDev ? __dirname : process.resourcesPath;
+        const baseDir = isDev ? __dirname+ '/resources' : process.resourcesPath;
         const senderPath = path.join(baseDir, 'sender.exe');
 
         // Logic: Use user-provided resolution, otherwise auto-detect
@@ -114,17 +114,20 @@ function setupVirtualCameraIPC() {
 
     ipcMain.on('start-virtual-camera', async (event, streamUrl, width, height, fps) => {
         const result = await startVirtualCamera(streamUrl, width, height, fps);
-
+        console.log(`[V-Cam IPC] Start Result: ${JSON.stringify(result)}`);
         event.reply('virtual-camera-status', {
             success: result.success,
-            message: result.message || '',
+            message: 'Virtual camera started successfully',
             resolution: result.resolution || ''
         });
     });
 
     ipcMain.on('stop-virtual-camera', (event) => {
         const result = stopVirtualCamera();
-        event.reply('virtual-camera-status', result);
+        event.reply('virtual-camera-status', {
+            success: result.success,
+            message: result.success ? 'Virtual camera stopped successfully' : 'Virtual camera was not running'
+        });
     });
 
     ipcMain.on('get-virtual-camera-status', (event) => {

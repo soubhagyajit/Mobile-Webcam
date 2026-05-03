@@ -5,377 +5,349 @@
  * the Free Software Foundation, either version 3 of the License.
  */
 
-const { exec, spawn } = require('child_process');
+const { exec, execFile } = require('child_process');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { app, dialog } = require('electron');
+const { app, dialog, BrowserWindow } = require('electron');
 
 const platform = os.platform();
 const tempDir = path.join(app.getPath('temp'), 'mobile-webcam-installer');
 
-// Ensure temp directory exists
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Check if Python is installed
-async function checkPython() {
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function getBaseDir() {
+    return app.isPackaged ? process.resourcesPath : __dirname + '/resources';
+}
+
+/**
+ * All DLLs that must exist beside sender.exe.
+ * opencv_videoio_ffmpeg is optional — only needed if OpenCV's FFMPEG backend
+ * is used (it is, for CAP_ANY on HTTP streams), so we treat it as required.
+ */
+const REQUIRED_FILES = [
+    'sender.exe',
+    'softcam.dll',
+    'opencv_world4120.dll',
+    'opencv_videoio_ffmpeg4120_64.dll',
+];
+
+// ─── Check functions ─────────────────────────────────────────────────────────
+
+/**
+ * Verifies that all required files are present in baseDir.
+ * Returns { ok: bool, missing: string[] }
+ */
+function checkRequiredFiles() {
+    const baseDir = getBaseDir();
+    const missing = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(baseDir, f)));
+    return { ok: missing.length === 0, missing };
+}
+
+/**
+ * Checks whether softcam.dll is already registered in the Windows registry.
+ * softcam writes its CLSID under HKCR\CLSID on registration.
+ */
+async function checkSoftcamRegistered() {
+    if (platform !== 'win32') return true;
+
     return new Promise((resolve) => {
-        exec('python --version', (error, stdout) => {
-            if (!error && stdout.includes('Python 3')) {
-                resolve({ installed: true, version: stdout.trim() });
-            } else {
-                exec('python3 --version', (error, stdout) => {
-                    if (!error) {
-                        resolve({ installed: true, version: stdout.trim(), command: 'python3' });
-                    } else {
-                        resolve({ installed: false });
-                    }
+        // Query DirectShow video capture devices via PowerShell.
+        // If "AWC Virtual Camera" appears, softcam.dll is registered and active.
+        const ps = `Get-PnpDevice -Class Camera | Select-Object -ExpandProperty FriendlyName`;
+        exec(`powershell -NoProfile -Command "${ps}"`, (error, stdout) => {
+            if (!error && stdout.includes('AWC Virtual Cam')) {
+                console.log('[V-Cam] AWC Virtual Cam found — driver registered ✓');
+                return resolve(true);
+            }
+
+            // Fallback: check via DirectShow registry category (Video Capture Sources)
+            // HKCR\CLSID\{860BB310-...}\Instance lists all registered capture devices
+            exec(
+                'reg query "HKCR\\CLSID\\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\\Instance" /s 2>nul',
+                (err2, stdout2) => {
+                    resolve(!err2 && stdout2.includes('AWC Virtual Cam'));
+                }
+            );
+        });
+    });
+}
+
+/**
+ * Checks whether the MSVC 2015–2022 x64 runtime is installed.
+ * Looks for the VC++ redist entry in Add/Remove Programs.
+ */
+async function checkVcRedist() {
+    if (platform !== 'win32') return true;
+    return new Promise((resolve) => {
+        exec(
+            'reg query "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64" /v Version 2>nul',
+            (error, stdout) => {
+                // Key exists and version >= 14.40 (VS 2022)
+                if (error || !stdout) return resolve(false);
+                const match = stdout.match(/v(\d+)\.(\d+)/i);
+                if (match && parseInt(match[1]) >= 14) {
+                    resolve(true);
+                } else {
+                    resolve(false);
+                }
+            }
+        );
+    });
+}
+
+// ─── Install / register functions ────────────────────────────────────────────
+
+/**
+ * Registers softcam.dll with regsvr32 using its absolute path.
+ * The absolute path is critical — the registry stores it so apps can load the DLL.
+ */
+async function registerSoftcam(onProgress) {
+    if (platform !== 'win32') return;
+
+    const dllPath = path.join(getBaseDir(), 'softcam.dll');
+
+    onProgress('Registering virtual camera driver...', 30);
+
+    return new Promise((resolve, reject) => {
+        execFile('regsvr32', ['/s', dllPath], { shell: true }, (error) => {
+            if (error) {
+                console.error('[Installer] regsvr32 failed:', error.message);
+                // regsvr32 fails silently with /s — try with a UAC elevation via PowerShell
+                const psCmd = `Start-Process regsvr32 -ArgumentList '/s \\"${dllPath}\\"' -Verb RunAs -Wait`;
+                exec(`powershell -Command "${psCmd}"`, (err2) => {
+                    if (err2) reject(new Error('Failed to register softcam.dll — try running as administrator.'));
+                    else resolve();
                 });
+            } else {
+                resolve();
             }
         });
     });
 }
 
-// Install Python
-async function installPython(onProgress) {
-    if (platform === 'win32') {
-        onProgress('Downloading Python installer...', 10);
-        
-        // Download Python installer
-        const pythonUrl = 'https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe';
-        const installerPath = path.join(tempDir, 'python-installer.exe');
-        
-        await downloadFile(pythonUrl, installerPath, (downloaded, total) => {
-            const percent = Math.round((downloaded / total) * 50);
-            onProgress(`Downloading Python... ${percent}%`, 10 + percent);
-        });
-        
-        onProgress('Installing Python (this may take a few minutes)...', 60);
-        
-        // Install Python silently with pip and add to PATH
-        await new Promise((resolve, reject) => {
-            exec(`"${installerPath}" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1`, 
-                { maxBuffer: 1024 * 1024 * 10 }, 
-                (error) => {
-                    if (error) reject(error);
-                    else resolve();
-                }
-            );
-        });
-        
-        onProgress('Python installed!', 100);
-        
-    } else if (platform === 'darwin') {
-        onProgress('Installing Python via Homebrew...', 50);
-        await runCommand('brew', ['install', 'python@3.11']);
-        onProgress('Python installed!', 100);
-        
-    } else {
-        onProgress('Installing Python...', 50);
-        
-        // Try apt first
-        try {
-            await runCommand('apt-get', ['install', '-y', 'python3', 'python3-pip']);
-        } catch {
-            try {
-                await runCommand('dnf', ['install', '-y', 'python3', 'python3-pip']);
-            } catch {
-                await runCommand('pacman', ['-S', '--noconfirm', 'python', 'python-pip']);
-            }
-        }
-        
-        onProgress('Python installed!', 100);
-    }
-}
-
-// Check if pyvirtualcam is installed
-async function checkPyvirtualcam() {
+/**
+ * Unregisters softcam.dll — called on uninstall or cleanup.
+ */
+async function unregisterSoftcam() {
+    if (platform !== 'win32') return;
+    const dllPath = path.join(getBaseDir(), 'softcam.dll');
     return new Promise((resolve) => {
-        const pythonCmd = platform === 'win32' ? 'python' : 'python3';
-        exec(`${pythonCmd} -c "import pyvirtualcam"`, (error) => {
-            resolve(!error);
-        });
+        execFile('regsvr32', ['/u', '/s', dllPath], { shell: true }, () => resolve());
     });
 }
 
-// Install pyvirtualcam and dependencies
-async function installPyvirtualcam(onProgress) {
-    const pythonCmd = platform === 'win32' ? 'python' : 'python3';
-    
-    onProgress('Installing pyvirtualcam and dependencies...', 20);
-    
-    // Install dependencies
-    const packages = ['opencv-python', 'numpy', 'requests', 'pyvirtualcam'];
-    
-    for (let i = 0; i < packages.length; i++) {
-        const pkg = packages[i];
-        const percent = 20 + ((i + 1) / packages.length) * 80;
-        onProgress(`Installing ${pkg}...`, percent);
-        
-        await new Promise((resolve, reject) => {
-            exec(`${pythonCmd} -m pip install ${pkg}`, 
-                { maxBuffer: 1024 * 1024 * 10 },
-                (error) => {
-                    if (error) reject(error);
-                    else resolve();
-                }
-            );
-        });
-    }
-    
-    onProgress('pyvirtualcam installed!', 100);
-}
+/**
+ * Downloads and silently installs the Microsoft MSVC 2015–2022 x64 redistributable.
+ */
+async function installVcRedist(onProgress) {
+    if (platform !== 'win32') return;
 
-// Check if virtual camera backend is installed
-async function checkVirtualCamBackend() {
-    if (platform === 'win32') {
-        // Check for OBS Virtual Camera (comes with pyvirtualcam on Windows)
-        return new Promise((resolve) => {
-            exec('reg query "HKLM\\SOFTWARE\\OBS Studio"', (error) => {
-                resolve(!error);
-            });
-        });
-    } else if (platform === 'darwin') {
-        // Check for OBS Virtual Camera
-        return new Promise((resolve) => {
-            exec('ls /Library/CoreMediaIO/Plug-Ins/DAL/ 2>/dev/null | grep OBS', (error, stdout) => {
-                resolve(stdout.includes('OBS'));
-            });
-        });
-    } else {
-        // Check for v4l2loopback
-        return new Promise((resolve) => {
-            exec('lsmod | grep v4l2loopback', (error, stdout) => {
-                resolve(stdout.includes('v4l2loopback'));
-            });
-        });
-    }
-}
+    const url = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+    const dest = path.join(tempDir, 'vc_redist.x64.exe');
 
-// Install virtual camera backend
-async function installVirtualCamBackend(onProgress) {
-    if (platform === 'win32') {
-        onProgress('Installing OBS Studio (includes virtual camera)...', 30);
-        
-        // Download OBS installer
-        const obsUrl = 'https://github.com/obsproject/obs-studio/releases/download/29.1.3/OBS-Studio-29.1.3-Full-Installer-x64.exe';
-        const installerPath = path.join(tempDir, 'obs-installer.exe');
-        
-        await downloadFile(obsUrl, installerPath, (downloaded, total) => {
-            const percent = Math.round((downloaded / total) * 50);
-            onProgress(`Downloading OBS Studio... ${percent}%`, 30 + percent);
-        });
-        
-        onProgress('Installing OBS Studio...', 80);
-        
-        await new Promise((resolve, reject) => {
-            exec(`"${installerPath}" /S`, (error) => {
-                if (error) reject(error);
-                else resolve();
-            });
-        });
-        
-        onProgress('OBS Studio installed!', 100);
-        
-    } else if (platform === 'darwin') {
-        onProgress('Installing OBS Virtual Camera...', 50);
-        
-        try {
-            await runCommand('brew', ['install', '--cask', 'obs-virtualcam']);
-        } catch {
-            // Fallback to full OBS
-            await runCommand('brew', ['install', '--cask', 'obs']);
-        }
-        
-        onProgress('OBS Virtual Camera installed!', 100);
-        
-    } else {
-        onProgress('Installing v4l2loopback...', 50);
-        
-        try {
-            await runCommand('apt-get', ['install', '-y', 'v4l2loopback-dkms']);
-            await runCommand('modprobe', ['v4l2loopback', 'devices=1', 'video_nr=10', 'card_label=MobileWebcam', 'exclusive_caps=1']);
-        } catch {
-            try {
-                await runCommand('dnf', ['install', '-y', 'v4l2loopback']);
-                await runCommand('modprobe', ['v4l2loopback', 'devices=1', 'video_nr=10', 'card_label=MobileWebcam', 'exclusive_caps=1']);
-            } catch {
-                await runCommand('pacman', ['-S', '--noconfirm', 'v4l2loopback-dkms']);
-                await runCommand('modprobe', ['v4l2loopback', 'devices=1', 'video_nr=10', 'card_label=MobileWebcam', 'exclusive_caps=1']);
+    onProgress('Downloading MSVC runtime...', 10);
+
+    await downloadFile(url, dest, (downloaded, total) => {
+        const pct = total ? Math.round((downloaded / total) * 60) : 0;
+        onProgress(`Downloading MSVC runtime... ${pct}%`, 10 + pct);
+    });
+
+    onProgress('Installing MSVC runtime (this may take a moment)...', 72);
+
+    await new Promise((resolve, reject) => {
+        // /install /quiet /norestart — standard silent flags for the VC++ redist
+        execFile(dest, ['/install', '/quiet', '/norestart'], (error) => {
+            if (error && error.code !== 1638) {
+                // 1638 = "another version already installed" — treat as success
+                reject(new Error(`MSVC install failed (code ${error.code}): ${error.message}`));
+            } else {
+                resolve();
             }
-        }
-        
-        onProgress('v4l2loopback installed!', 100);
-    }
+        });
+    });
+
+    onProgress('MSVC runtime installed!', 100);
 }
 
-// Helper: Download file
+// ─── Download helper ──────────────────────────────────────────────────────────
+
 function downloadFile(url, dest, onProgress) {
     return new Promise((resolve, reject) => {
         const file = fs.createWriteStream(dest);
         const protocol = url.startsWith('https') ? https : http;
-        
-        protocol.get(url, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                // Follow redirect
-                return downloadFile(response.headers.location, dest, onProgress)
-                    .then(resolve)
-                    .catch(reject);
-            }
-            
-            const totalSize = parseInt(response.headers['content-length'], 10);
-            let downloadedSize = 0;
 
-            response.on('data', (chunk) => {
-                downloadedSize += chunk.length;
-                if (onProgress) {
-                    onProgress(downloadedSize, totalSize);
+        const request = (targetUrl) => {
+            protocol.get(targetUrl, (response) => {
+                if (response.statusCode === 301 || response.statusCode === 302) {
+                    return request(response.headers.location);
                 }
-            });
+                if (response.statusCode !== 200) {
+                    return reject(new Error(`Download failed: HTTP ${response.statusCode}`));
+                }
 
-            response.pipe(file);
+                const total = parseInt(response.headers['content-length'], 10);
+                let downloaded = 0;
 
-            file.on('finish', () => {
-                file.close();
-                resolve(dest);
+                response.on('data', (chunk) => {
+                    downloaded += chunk.length;
+                    if (onProgress) onProgress(downloaded, total);
+                });
+
+                response.pipe(file);
+                file.on('finish', () => { file.close(); resolve(dest); });
+            }).on('error', (err) => {
+                fs.unlink(dest, () => {});
+                reject(err);
             });
-        }).on('error', (err) => {
-            fs.unlink(dest, () => {});
-            reject(err);
-        });
+        };
+
+        request(url);
     });
 }
 
-// Helper: Run command with admin privileges
-function runCommand(command, args = []) {
-    return new Promise((resolve, reject) => {
-        if (platform === 'win32') {
-            const psCommand = `Start-Process -FilePath "${command}" -ArgumentList "${args.join(' ')}" -Verb RunAs -Wait`;
-            exec(`powershell -Command "${psCommand}"`, (error, stdout) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
-        } else if (platform === 'darwin') {
-            const script = `do shell script "${command} ${args.join(' ')}" with administrator privileges`;
-            exec(`osascript -e '${script}'`, (error, stdout) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
-        } else {
-            exec(`pkexec ${command} ${args.join(' ')}`, (error, stdout) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
-        }
-    });
-}
+// ─── Main setup flow ──────────────────────────────────────────────────────────
 
-// Main auto-setup function
-async function autoSetupPython(progressCallback) {
-    const steps = [
-        { 
-            name: 'Python', 
-            check: checkPython, 
-            install: installPython 
-        },
-        { 
-            name: 'pyvirtualcam', 
-            check: checkPyvirtualcam, 
-            install: installPyvirtualcam 
-        },
-        { 
-            name: 'Virtual Camera Backend', 
-            check: checkVirtualCamBackend, 
-            install: installVirtualCamBackend 
-        }
-    ];
-    
-    const results = {
-        success: true,
-        installed: [],
-        errors: []
+/**
+ * Runs the full setup sequence:
+ *   1. Check all required files are present
+ *   2. Install MSVC runtime if missing
+ *   3. Register softcam.dll if not already registered
+ */
+async function autoSetup(progressCallback) {
+    const results = { success: true, installed: [], errors: [] };
+
+    const report = (msg, pct) => {
+        console.log(`[Installer] ${msg}`);
+        if (progressCallback) progressCallback(msg, pct);
     };
-    
-    for (const step of steps) {
-        try {
-            progressCallback(`Checking ${step.name}...`, 0);
-            
-            const checkResult = await step.check();
-            const isInstalled = checkResult.installed !== undefined ? checkResult.installed : checkResult;
-            
-            if (!isInstalled) {
-                progressCallback(`Installing ${step.name}...`, 0);
-                await step.install(progressCallback);
-                results.installed.push(step.name);
-            } else {
-                const version = checkResult.version || '';
-                progressCallback(`${step.name} already installed ${version} ✓`, 100);
-            }
-        } catch (error) {
-            results.success = false;
-            results.errors.push({ step: step.name, error: error.message });
-            progressCallback(`Error: ${step.name} - ${error.message}`, 0);
-        }
+
+    // Step 1 — file presence check
+    report('Checking required files...', 0);
+    const { ok, missing } = checkRequiredFiles();
+    if (!ok) {
+        const msg = `Missing files in resources folder: ${missing.join(', ')}`;
+        results.success = false;
+        results.errors.push({ step: 'File check', error: msg });
+        report(`Error: ${msg}`, 0);
+        return results;
     }
-    
+    report('All required files found ✓', 10);
+
+    // Step 2 — MSVC runtime
+    try {
+        report('Checking MSVC runtime...', 15);
+        const hasRedist = await checkVcRedist();
+        if (!hasRedist) {
+            report('MSVC runtime not found — installing...', 20);
+            await installVcRedist(report);
+            results.installed.push('MSVC VC++ Runtime');
+        } else {
+            report('MSVC runtime already installed ✓', 50);
+        }
+    } catch (error) {
+        // Non-fatal — sender.exe might still work if system DLLs are present
+        results.errors.push({ step: 'MSVC Runtime', error: error.message });
+        report(`Warning: MSVC install failed — ${error.message}`, 50);
+    }
+
+    // Step 3 — softcam.dll registration
+    try {
+        report('Checking softcam driver registration...', 55);
+        const isRegistered = await checkSoftcamRegistered();
+        if (!isRegistered) {
+            report('Registering softcam virtual camera driver...', 60);
+            await registerSoftcam(report);
+            results.installed.push('softcam.dll (virtual camera driver)');
+            report('Virtual camera driver registered ✓', 100);
+        } else {
+            report('Virtual camera driver already registered ✓', 100);
+        }
+    } catch (error) {
+        results.success = false;
+        results.errors.push({ step: 'softcam registration', error: error.message });
+        report(`Error: softcam registration failed — ${error.message}`, 60);
+    }
+
     return results;
 }
 
-async function showSetupDialog(mainWindow,py,vc) {
-    let detailText = 'Would you like to automatically install the required components?\n\n';
+// ─── Dialog ───────────────────────────────────────────────────────────────────
 
-    if (!py && !vc) {
-        detailText += 'This will install:\n• Python\n• pyvirtualcamera library';
-    } else if (!py) {
-        detailText += 'This will install:\n• Python';
-    } else if (!vc) {
-        detailText += 'This will install:\n• pyvirtualcamera library';
-    } else {
-        detailText += 'All components are already installed.';
+/**
+ * Shows a dialog explaining what will be installed and asks for confirmation.
+ * Returns 0 = proceed, 1 = skip, 2 = show manual instructions.
+ */
+async function showSetupDialog(mainWindow) {
+    const { ok, missing } = checkRequiredFiles();
+    const hasRedist = await checkVcRedist();
+    const isRegistered = await checkSoftcamRegistered();
+
+    const toInstall = [];
+    if (!hasRedist) toInstall.push('• Microsoft MSVC Runtime (VC++ 2022 x64)');
+    if (!isRegistered) toInstall.push('• softcam virtual camera driver (regsvr32)');
+
+    if (ok && hasRedist && isRegistered) {
+        return -1; // nothing to do
     }
+
+    let detail = 'Mobile Webcam needs to set up the following:\n\n';
+    detail += toInstall.length ? toInstall.join('\n') : 'No additional installs needed.';
+
+    if (!ok) {
+        detail += `\n\n⚠ Missing files: ${missing.join(', ')}\nPlease reinstall the application.`;
+    }
+
+    detail += '\n\nThis requires administrator privileges.';
+
     const response = await dialog.showMessageBox(mainWindow, {
         type: 'question',
-        title: 'Virtual Camera Setup',
-        message: 'Required components are missing.',
-        detail: detailText,
-        buttons: ['Install Automatically', 'Skip', 'Manual Instructions'],
+        title: 'Mobile Webcam Setup',
+        message: 'One-time setup required',
+        detail,
+        buttons: ['Set Up Now', 'Skip', 'Manual Instructions'],
         defaultId: 0,
-        cancelId: 1
+        cancelId: 1,
     });
 
     return response.response;
 }
 
-/**
- * Creates the dedicated window for the installation UI.
- */
+// ─── Install window ───────────────────────────────────────────────────────────
+
 function createInstallWindow() {
     const installWindow = new BrowserWindow({
-        width: 640,
-        height: 480,
+        width: 480,
+        height: 640,
         resizable: false,
         frame: true,
         webPreferences: {
             nodeIntegration: true,
-            contextIsolation: false
-        }
+            contextIsolation: false,
+        },
     });
 
     installWindow.loadFile('installer.html');
     return installWindow;
 }
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
 module.exports = {
-    autoSetupPython,
-    checkPython, 
+    autoSetup,
     showSetupDialog,
     createInstallWindow,
-    checkPyvirtualcam,
-    checkVirtualCamBackend,
-    installPython,
-    installPyvirtualcam,
-    installVirtualCamBackend
+    checkRequiredFiles,
+    checkSoftcamRegistered,
+    checkVcRedist,
+    registerSoftcam,
+    unregisterSoftcam,
+    installVcRedist,
+    getBaseDir,
 };

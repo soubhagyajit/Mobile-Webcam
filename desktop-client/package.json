@@ -1,6 +1,6 @@
 {
   "name": "awc-desktop-client",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "license": "GPL-3.0-or-later",
   "description": "Android Webcam Software - Desktop client",
   "author": {
@@ -33,7 +33,22 @@
       "createDesktopShortcut": true
     },
     "extraResources": [
-      "virtual_webcam.py"
+      {
+        "from": "resources/sender.exe",
+        "to": "sender.exe"
+      },
+      {
+        "from": "resources/softcam.dll",
+        "to": "softcam.dll"
+      },
+      {
+        "from": "resources/opencv_world4120.dll",
+        "to": "opencv_world4120.dll"
+      },
+      {
+        "from": "resources/opencv_videoio_ffmpeg4120_64.dll",
+        "to": "opencv_videoio_ffmpeg4120_64.dll"
+      }
     ],
     "files": [
       "main.js",
