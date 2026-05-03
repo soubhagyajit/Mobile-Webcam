@@ -12,6 +12,28 @@
         android:layout_height="match_parent"
         app:scaleType="fillCenter" />
 
+    <!-- Grid Lines -->
+    <FrameLayout
+        android:id="@+id/gridLines"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:weightSum="3">
+            <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#60FFFFFF"/>
+            <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#60FFFFFF"/>
+            <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:weightSum="3">
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+            <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#60FFFFFF"/>
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+            <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#60FFFFFF"/>
+            <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"/>
+        </LinearLayout>
+    </FrameLayout>
+
     <!-- Focus Ring Indicator -->
     <ImageView
         android:id="@+id/focusRing"
@@ -37,56 +59,7 @@
             android:rotation="270" />
     </FrameLayout>
 
-    <!-- Focus Controls -->
-    <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical|end"
-        android:layout_marginEnd="16dp"
-        android:background="#80000000"
-        android:orientation="vertical"
-        android:padding="8dp">
-
-        <TextView
-            android:id="@+id/focusAutoButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:gravity="center"
-            android:text="A"
-            android:textColor="#FFFFFF"
-            android:textSize="22sp"
-            android:textStyle="bold"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?attr/selectableItemBackgroundBorderless"/>
-
-        <TextView
-            android:id="@+id/focusTapButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:gravity="center"
-            android:text="👆"
-            android:textColor="#80FFFFFF"
-            android:textSize="22sp"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?attr/selectableItemBackgroundBorderless"/>
-
-        <TextView
-            android:id="@+id/focusManualButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:gravity="center"
-            android:text="M"
-            android:textColor="#80FFFFFF"
-            android:textSize="22sp"
-            android:textStyle="bold"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?attr/selectableItemBackgroundBorderless"/>
-    </LinearLayout>
-
-    <!-- Sliders Container -->
+    <!-- Focus Slider Container -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -163,6 +136,20 @@
             android:visibility="gone" />
 
         <TextView
+            android:id="@+id/focusToggleButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:text="FOC: A"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="?attr/selectableItemBackground"
+            android:padding="4dp"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
             android:id="@+id/ipAddressText"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -191,6 +178,19 @@
             android:src="@drawable/baseline_settings_24"
             android:contentDescription="Settings"
             app:tint="#FFFFFF" />
+
+        <TextView
+            android:id="@+id/gridButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_toEndOf="@id/settingsButton"
+            android:layout_centerVertical="true"
+            android:layout_marginStart="8dp"
+            android:text="▦"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp"
+            android:gravity="center"
+            android:background="?attr/selectableItemBackgroundBorderless" />
 
         <FrameLayout
             android:id="@+id/shutterButton"
@@ -223,90 +223,155 @@
     </RelativeLayout>
 
     <!-- Settings Overlay Page -->
-    <LinearLayout
-        android:id="@+id/settingsPage"
+    <FrameLayout
+        android:id="@+id/settingsOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#E6000000"
-        android:orientation="vertical"
-        android:padding="32dp"
+        android:background="#60000000"
         android:visibility="gone"
         android:clickable="true"
         android:focusable="true">
 
-        <RelativeLayout
+        <LinearLayout
+            android:id="@+id/settingsPanel"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="32dp">
-            <TextView
-                android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:background="#E6000000"
+            android:orientation="vertical"
+            android:padding="32dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <RelativeLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Settings"
-                android:textColor="#FFFFFF"
-                android:textSize="24sp"
-                android:textStyle="bold" />
-            <ImageButton
-                android:id="@+id/closeSettingsButton"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:layout_alignParentEnd="true"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:src="@android:drawable/ic_menu_close_clear_cancel"
-                app:tint="#FFFFFF" />
-        </RelativeLayout>
+                android:layout_marginBottom="16dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Settings"
+                    android:textColor="#FFFFFF"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
+                <ImageButton
+                    android:id="@+id/closeSettingsButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_alignParentEnd="true"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@android:drawable/ic_menu_close_clear_cancel"
+                    app:tint="#FFFFFF" />
+            </RelativeLayout>
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Video Resolution"
-            android:textColor="#80FFFFFF"
-            android:textSize="14sp" />
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
 
-        <Spinner
-            android:id="@+id/resolutionSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/spinner_background"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:theme="@style/ThemeOverlay.AppCompat.Dark" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="16dp">
 
-        <RelativeLayout
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:layout_marginTop="24dp">
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_centerVertical="true"
-                android:text="Screen Dim Timeout"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp" />
-            <Spinner
-                android:id="@+id/dimTimeoutSpinner"
-                android:layout_width="150dp"
-                android:layout_height="48dp"
-                android:layout_alignParentEnd="true"
-                android:layout_centerVertical="true"
-                android:background="@drawable/spinner_background"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp"
-                android:theme="@style/ThemeOverlay.AppCompat.Dark" />
-        </RelativeLayout>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Video Resolution"
+                        android:textColor="#80FFFFFF"
+                        android:textSize="14sp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Changes will apply next time the camera starts."
-            android:textColor="#60FFFFFF"
-            android:textSize="12sp" />
+                    <Spinner
+                        android:id="@+id/resolutionSpinner"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/spinner_background"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:theme="@style/ThemeOverlay.AppCompat.Dark" />
 
-        <!-- Legacy Buttons for logic mapping -->
-        <Button android:id="@+id/startButton" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />
-        <Button android:id="@+id/stopButton" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />
-    </LinearLayout>
+                    <RelativeLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:layout_marginTop="24dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_centerVertical="true"
+                            android:text="Screen Dim Timeout"
+                            android:textColor="#FFFFFF"
+                            android:textSize="16sp" />
+                        <Spinner
+                            android:id="@+id/dimTimeoutSpinner"
+                            android:layout_width="150dp"
+                            android:layout_height="48dp"
+                            android:layout_alignParentEnd="true"
+                            android:layout_centerVertical="true"
+                            android:background="@drawable/spinner_background"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:theme="@style/ThemeOverlay.AppCompat.Dark" />
+                    </RelativeLayout>
+
+                    <RelativeLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:layout_marginTop="24dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_centerVertical="true"
+                            android:text="Save Exposure"
+                            android:textColor="#FFFFFF"
+                            android:textSize="16sp" />
+                        <Switch
+                            android:id="@+id/saveExposureSwitch"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_alignParentEnd="true"
+                            android:layout_centerVertical="true"
+                            android:theme="@style/ThemeOverlay.AppCompat.Dark" />
+                    </RelativeLayout>
+
+                    <RelativeLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="24dp">
+                        <TextView
+                            android:id="@+id/qualityLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Stream Quality (70%)"
+                            android:textColor="#FFFFFF"
+                            android:textSize="16sp" />
+                        <SeekBar
+                            android:id="@+id/qualitySeekBar"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_below="@id/qualityLabel"
+                            android:layout_marginTop="12dp"
+                            android:max="90" />
+                    </RelativeLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="24dp"
+                        android:text="Changes will apply next time the camera starts."
+                        android:textColor="#60FFFFFF"
+                        android:textSize="12sp" />
+
+                    <!-- Legacy Buttons for logic mapping -->
+                    <Button android:id="@+id/startButton" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />
+                    <Button android:id="@+id/stopButton" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />
+                </LinearLayout>
+            </ScrollView>
+        </LinearLayout>
+    </FrameLayout>
 
     <!-- Center idle overlay removed as requested -->
     <View android:id="@+id/idleOverlay" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />

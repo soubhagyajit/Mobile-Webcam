@@ -54,23 +54,29 @@ class MainActivity : AppCompatActivity() {
     private lateinit var idleOverlay: View
     private lateinit var statusIndicator: View
     private lateinit var settingsButton: ImageButton
-    private lateinit var settingsPage: View
+    private lateinit var settingsOverlay: View
+    private lateinit var settingsPanel: View
     private lateinit var closeSettingsButton: ImageButton
     private lateinit var dimTimeoutSpinner: Spinner
+    private lateinit var saveExposureSwitch: Switch
+    private lateinit var qualitySeekBar: SeekBar
+    private lateinit var qualityLabel: TextView
     private lateinit var dimOverlay: View
     private lateinit var focusRing: ImageView
+    private lateinit var gridButton: TextView
+    private lateinit var gridLines: View
     
     private lateinit var expButton: TextView
-    private lateinit var focusAutoButton: TextView
-    private lateinit var focusTapButton: TextView
-    private lateinit var focusManualButton: TextView
+    private lateinit var focusToggleButton: TextView
     private lateinit var focusContainer: View
     private lateinit var focusSeekBar: SeekBar
     private lateinit var exposureContainer: View
     private lateinit var exposureSeekBar: SeekBar
     private lateinit var gestureDetector: android.view.GestureDetector
+    private lateinit var scaleGestureDetector: android.view.ScaleGestureDetector
     
     private var focusMode = 0 // 0: Auto, 1: Tap, 2: Manual
+    private var streamQuality = 70
     
     private var dimHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var dimRunnable = Runnable { showDimOverlay() }
@@ -80,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private lateinit var cameraExecutor: ExecutorService
     private var httpServer: VideoServer? = null
+    private var preview: Preview? = null
     
     private var isFrontCamera = false
     @Volatile
@@ -89,27 +96,41 @@ class MainActivity : AppCompatActivity() {
     
     // Pre-allocated buffers for zero-copy (or reduced copy) image processing
     private var nv21Buffer: ByteArray? = null
+    private var yBytes: ByteArray? = null
+    private var uBytes: ByteArray? = null
+    private var vBytes: ByteArray? = null
     private val jpegOutputStream = ByteArrayOutputStream()
     
     private val PORT = 8080
 
     companion object {
         private const val TAG = "MobileWebcam"
+        var activeServer: NanoHTTPD? = null
+        var activeExecutor: ExecutorService? = null
+        var instance: MainActivity? = null
+
+        fun stopServerGlobally(context: android.content.Context) {
+            val activity = instance
+            if (activity != null) {
+                activity.runOnUiThread {
+                    activity.stopServer()
+                }
+            } else {
+                activeServer?.stop()
+                activeServer = null
+                activeExecutor?.shutdown()
+                context.stopService(Intent(context, WebcamService::class.java))
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         
+        activeExecutor?.shutdown()
         cameraExecutor = Executors.newSingleThreadExecutor()
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or 
-                           WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
-        }
+        activeExecutor = cameraExecutor
         
         setContentView(R.layout.activity_main_simple)
 
@@ -128,16 +149,20 @@ class MainActivity : AppCompatActivity() {
         statusIndicator = findViewById(R.id.statusIndicator)
         settingsButton = findViewById(R.id.settingsButton)
         flipButton = findViewById(R.id.flipButton)
-        settingsPage = findViewById(R.id.settingsPage)
+        settingsOverlay = findViewById(R.id.settingsOverlay)
+        settingsPanel = findViewById(R.id.settingsPanel)
         closeSettingsButton = findViewById(R.id.closeSettingsButton)
         dimTimeoutSpinner = findViewById(R.id.dimTimeoutSpinner)
+        saveExposureSwitch = findViewById(R.id.saveExposureSwitch)
+        qualitySeekBar = findViewById(R.id.qualitySeekBar)
+        qualityLabel = findViewById(R.id.qualityLabel)
         dimOverlay = findViewById(R.id.dimOverlay)
         focusRing = findViewById(R.id.focusRing)
+        gridButton = findViewById(R.id.gridButton)
+        gridLines = findViewById(R.id.gridLines)
         
         expButton = findViewById(R.id.expButton)
-        focusAutoButton = findViewById(R.id.focusAutoButton)
-        focusTapButton = findViewById(R.id.focusTapButton)
-        focusManualButton = findViewById(R.id.focusManualButton)
+        focusToggleButton = findViewById(R.id.focusToggleButton)
         focusContainer = findViewById(R.id.focusContainer)
         focusSeekBar = findViewById(R.id.focusSeekBar)
         exposureContainer = findViewById(R.id.exposureContainer)
@@ -147,6 +172,15 @@ class MainActivity : AppCompatActivity() {
         expButton.setOnClickListener {
             exposureContainer.visibility = if (exposureContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
+
+        scaleGestureDetector = android.view.ScaleGestureDetector(this, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: android.view.ScaleGestureDetector): Boolean {
+                val currentZoomRatio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
+                val delta = detector.scaleFactor
+                camera?.cameraControl?.setZoomRatio(currentZoomRatio * delta)
+                return true
+            }
+        })
         
         gestureDetector = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
@@ -159,9 +193,13 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        focusAutoButton.setOnClickListener { setFocusMode(0) }
-        focusTapButton.setOnClickListener { setFocusMode(1) }
-        focusManualButton.setOnClickListener { setFocusMode(2) }
+        focusToggleButton.setOnClickListener {
+            when (focusMode) {
+                0 -> setFocusMode(2) // A -> M
+                2 -> setFocusMode(0) // M -> A
+                1 -> setFocusMode(0) // Tap -> A
+            }
+        }
         
         focusSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -185,6 +223,23 @@ class MainActivity : AppCompatActivity() {
         val dimAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, dimOptions)
         dimTimeoutSpinner.adapter = dimAdapter
         
+        streamQuality = prefs.getInt("stream_quality", 70)
+        qualitySeekBar.progress = streamQuality - 10
+        qualityLabel.text = "Stream Quality ($streamQuality%)"
+
+        qualitySeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val q = progress + 10
+                qualityLabel.text = "Stream Quality ($q%)"
+                if (fromUser) {
+                    streamQuality = q
+                    prefs.edit().putInt("stream_quality", q).apply()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
         val savedDimPos = prefs.getInt("dim_pos", 0)
         dimTimeoutMs = when (savedDimPos) {
             1 -> 30000L
@@ -194,6 +249,11 @@ class MainActivity : AppCompatActivity() {
             else -> 0L
         }
         dimTimeoutSpinner.setSelection(savedDimPos)
+        
+        saveExposureSwitch.isChecked = prefs.getBoolean("save_exposure", true)
+        saveExposureSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("save_exposure", isChecked).apply()
+        }
         
         dimTimeoutSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -221,12 +281,24 @@ class MainActivity : AppCompatActivity() {
             if (isServerRunning) stopServer() else startServer()
         }
 
+        gridButton.setOnClickListener {
+            gridLines.visibility = if (gridLines.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            gridButton.setTextColor(if (gridLines.visibility == View.VISIBLE) 
+                ContextCompat.getColor(this, android.R.color.holo_blue_light) 
+            else 
+                ContextCompat.getColor(this, android.R.color.white))
+        }
+
         settingsButton.setOnClickListener { 
-            settingsPage.visibility = View.VISIBLE 
+            openSettings()
         }
 
         closeSettingsButton.setOnClickListener { 
-            settingsPage.visibility = View.GONE
+            closeSettings()
+        }
+        
+        settingsOverlay.setOnClickListener {
+            closeSettings()
         }
 
         flipButton.setOnClickListener { flipCamera() }
@@ -256,6 +328,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDimOverlay() {
         dimOverlay.visibility = View.VISIBLE
+        // Detach surface to pause rendering and save power/heat
+        preview?.setSurfaceProvider(null)
         // Set screen brightness to minimum to save power
         val params = window.attributes
         params.screenBrightness = 0.01f
@@ -264,11 +338,40 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideDimOverlay() {
         dimOverlay.visibility = View.GONE
+        // Reattach surface to resume preview
+        preview?.setSurfaceProvider(previewView.surfaceProvider)
         // Restore default screen brightness
         val params = window.attributes
         params.screenBrightness = -1.0f
         window.attributes = params
         resetDimTimer()
+    }
+
+    private fun openSettings() {
+        settingsOverlay.visibility = View.VISIBLE
+        val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val displayWidth = resources.displayMetrics.widthPixels
+        
+        // Portrait = 100% width, Landscape = 50% width
+        val panelWidth = if (isLandscape) displayWidth / 2 else displayWidth
+        settingsPanel.layoutParams.width = panelWidth
+        settingsPanel.requestLayout()
+        
+        // Animate slide in from the right edge
+        settingsPanel.translationX = panelWidth.toFloat()
+        settingsPanel.animate()
+            .translationX(0f)
+            .setDuration(250)
+            .start()
+    }
+
+    private fun closeSettings() {
+        val panelWidth = settingsPanel.width.toFloat()
+        settingsPanel.animate()
+            .translationX(panelWidth)
+            .setDuration(200)
+            .withEndAction { settingsOverlay.visibility = View.GONE }
+            .start()
     }
 
     private fun setFocusMode(mode: Int) {
@@ -278,19 +381,13 @@ class MainActivity : AppCompatActivity() {
         }
         
         focusMode = mode
-        val activeColor = ContextCompat.getColor(this, android.R.color.white)
-        val inactiveColor = ContextCompat.getColor(this, android.R.color.darker_gray)
-        val inactiveAlpha = 0.5f
-        val activeAlpha = 1.0f
         
-        focusAutoButton.setTextColor(if (mode == 0) activeColor else inactiveColor)
-        focusAutoButton.alpha = if (mode == 0) activeAlpha else inactiveAlpha
-
-        focusTapButton.setTextColor(if (mode == 1) activeColor else inactiveColor)
-        focusTapButton.alpha = if (mode == 1) activeAlpha else inactiveAlpha
-
-        focusManualButton.setTextColor(if (mode == 2) activeColor else inactiveColor)
-        focusManualButton.alpha = if (mode == 2) activeAlpha else inactiveAlpha
+        focusToggleButton.text = when (mode) {
+            0 -> "FOC: A"
+            1 -> "FOC: TAP"
+            2 -> "FOC: M"
+            else -> "FOC: A"
+        }
         
         focusContainer.visibility = if (mode == 2) View.VISIBLE else View.GONE
         
@@ -489,7 +586,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun startServer() {
         try {
+            activeServer?.stop()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping active server", e)
+        }
+        activeServer = null
+
+        try {
             httpServer = VideoServer(PORT)
+            activeServer = httpServer
             httpServer?.start()
             
             // Start Foreground Service
@@ -512,9 +617,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopServer() {
+    fun stopServer() {
         httpServer?.stop()
         httpServer = null
+        activeServer = null
         
         // Stop Foreground Service
         stopService(Intent(this, WebcamService::class.java))
@@ -554,11 +660,12 @@ class MainActivity : AppCompatActivity() {
         // Ensure the initial session starts with the correct focus mode
         applyFocusToBuilders(previewBuilder, analysisBuilder)
 
-        val preview = previewBuilder.build().also {
+        preview = previewBuilder.build().also {
             it.setSurfaceProvider(previewView.surfaceProvider)
         }
 
         previewView.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
             gestureDetector.onTouchEvent(event)
             true
         }
@@ -579,8 +686,11 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = cameraProviderFuture.get()
             }
             cameraProvider?.unbindAll()
+            
+            // Use WebcamService instance as LifecycleOwner if available so stream survives backgrounding
+            val lifecycleOwner = WebcamService.instance ?: this
             camera = cameraProvider?.bindToLifecycle(
-                this,
+                lifecycleOwner,
                 cameraSelector,
                 preview,
                 imageAnalyzer
@@ -590,18 +700,28 @@ class MainActivity : AppCompatActivity() {
             camera?.cameraInfo?.exposureState?.let { exposureState ->
                 val range = exposureState.exposureCompensationRange
                 if (range.lower != range.upper) {
+                    val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                    val shouldSave = prefs.getBoolean("save_exposure", true)
+                    val savedExp = if (shouldSave) prefs.getInt("last_exposure", 0) else 0
+                    val clampedExp = savedExp.coerceIn(range.lower, range.upper)
+                    
+                    camera?.cameraControl?.setExposureCompensationIndex(clampedExp)
+                    
                     runOnUiThread {
                         expButton.visibility = View.VISIBLE
                         // Hide by default, user can toggle it via expButton
                         exposureContainer.visibility = View.GONE
                         exposureSeekBar.max = range.upper - range.lower
-                        exposureSeekBar.progress = exposureState.exposureCompensationIndex - range.lower
+                        exposureSeekBar.progress = clampedExp - range.lower
                         
                         exposureSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                                 if (fromUser) {
                                     val index = progress + range.lower
                                     camera?.cameraControl?.setExposureCompensationIndex(index)
+                                    if (prefs.getBoolean("save_exposure", true)) {
+                                        prefs.edit().putInt("last_exposure", index).apply()
+                                    }
                                 }
                             }
                             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -641,7 +761,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 
                 cameraProvider?.unbindAll()
-                camera = cameraProvider?.bindToLifecycle(this, cameraSelector, fallbackPreview, fallbackAnalyzer)
+                val lifecycleOwner = WebcamService.instance ?: this
+                camera = cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, fallbackPreview, fallbackAnalyzer)
                 applyCurrentFocusMode()
                 
                 runOnUiThread {
@@ -652,7 +773,8 @@ class MainActivity : AppCompatActivity() {
                 // Ultimate fallback: Just Preview at default resolution
                 try {
                     cameraProvider?.unbindAll()
-                    camera = cameraProvider?.bindToLifecycle(this, cameraSelector, Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) })
+                    val lifecycleOwner = WebcamService.instance ?: this
+                    camera = cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) })
                 } catch (finalEx: Exception) {
                     runOnUiThread { Toast.makeText(this, "Camera error: ${finalEx.message}", Toast.LENGTH_SHORT).show() }
                 }
@@ -672,36 +794,99 @@ class MainActivity : AppCompatActivity() {
         val uBuffer = uPlane.buffer
         val vBuffer = vPlane.buffer
 
-        val ySize = yBuffer.remaining()
-        // NV21 size is width * height * 1.5
-        val nv21Size = ySize + (ySize / 2)
+        val ySizeRaw = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+
+        // Tightly packed NV21 size is width * height * 1.5
+        val nv21Size = width * height + (width * height / 2)
         
         if (nv21Buffer == null || nv21Buffer!!.size != nv21Size) {
             nv21Buffer = ByteArray(nv21Size)
         }
         val nv21 = nv21Buffer!!
         
-        // Copy Y plane
-        yBuffer.get(nv21, 0, ySize)
+        // Extract Y plane into pre-allocated buffer
+        if (yBytes == null || yBytes!!.size != ySizeRaw) {
+            yBytes = ByteArray(ySizeRaw)
+        }
+        yBuffer.get(yBytes!!)
+        val yArr = yBytes!!
+        
+        val yRowStride = yPlane.rowStride
+        
+        // Copy Y plane, stripping padding if present
+        if (yRowStride == width) {
+            System.arraycopy(yArr, 0, nv21, 0, width * height)
+        } else {
+            var yPos = 0
+            for (row in 0 until height) {
+                System.arraycopy(yArr, row * yRowStride, nv21, yPos, width)
+                yPos += width
+            }
+        }
+        
+        // Detect if device is rotated to reverse landscape (180 degree flip)
+        val rotation = windowManager.defaultDisplay.rotation
+        val shouldFlip180 = (rotation == android.view.Surface.ROTATION_270)
+        
+        if (shouldFlip180) {
+            // Flip Y plane in-place
+            val yEnd = width * height
+            for (i in 0 until yEnd / 2) {
+                val temp = nv21[i]
+                nv21[i] = nv21[yEnd - 1 - i]
+                nv21[yEnd - 1 - i] = temp
+            }
+        }
 
-        // Interleave V and U planes (NV21 is YYYY VUVU)
+        // Bulk extract U and V into pre-allocated byte arrays to avoid slow DirectByteBuffer per-pixel access
+        if (uBytes == null || uBytes!!.size != uSize) uBytes = ByteArray(uSize)
+        if (vBytes == null || vBytes!!.size != vSize) vBytes = ByteArray(vSize)
+        
+        uBuffer.get(uBytes!!)
+        vBuffer.get(vBytes!!)
+        
+        val uArr = uBytes!!
+        val vArr = vBytes!!
+
         val vRowStride = vPlane.rowStride
         val vPixelStride = vPlane.pixelStride
         val uRowStride = uPlane.rowStride
         val uPixelStride = uPlane.pixelStride
 
-        var pos = ySize
-        for (row in 0 until height / 2) {
-            for (col in 0 until width / 2) {
-                // V is at (row * rowStride) + (col * pixelStride)
-                nv21[pos++] = vBuffer.get(row * vRowStride + col * vPixelStride)
-                nv21[pos++] = uBuffer.get(row * uRowStride + col * uPixelStride)
+        if (shouldFlip180) {
+            // Write UV data backwards to complete the 180 flip
+            var pos = nv21Size - 2
+            for (row in 0 until height / 2) {
+                var vPos = row * vRowStride
+                var uPos = row * uRowStride
+                for (col in 0 until width / 2) {
+                    nv21[pos] = vArr[vPos]
+                    nv21[pos + 1] = uArr[uPos]
+                    pos -= 2
+                    vPos += vPixelStride
+                    uPos += uPixelStride
+                }
+            }
+        } else {
+            // Standard UV write
+            var pos = width * height // Start of U/V interleaved data
+            for (row in 0 until height / 2) {
+                var vPos = row * vRowStride
+                var uPos = row * uRowStride
+                for (col in 0 until width / 2) {
+                    nv21[pos++] = vArr[vPos]
+                    nv21[pos++] = uArr[uPos]
+                    vPos += vPixelStride
+                    uPos += uPixelStride
+                }
             }
         }
 
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
         jpegOutputStream.reset() // Reuse the stream instead of allocating a new one
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 80, jpegOutputStream)
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), streamQuality, jpegOutputStream)
         currentFrame = jpegOutputStream.toByteArray()
     }
 
@@ -717,6 +902,7 @@ class MainActivity : AppCompatActivity() {
 
             val chars = manager.getCameraCharacteristics(cameraId)
             val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+//            println(map)
             val yuvSizes = map?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888) ?: emptyArray()
             val videoSizes = map?.getOutputSizes(android.media.MediaRecorder::class.java) ?: emptyArray()
             
@@ -836,7 +1022,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showFocusRing(x: Float, y: Float) {
-        if (settingsPage.visibility == View.VISIBLE || isDimmed()) return
+        if (settingsOverlay.visibility == View.VISIBLE || isDimmed()) return
 
         focusRing.translationX = x - focusRing.width / 2
         focusRing.translationY = y - focusRing.height / 2
@@ -895,29 +1081,41 @@ class MainActivity : AppCompatActivity() {
                         private var buffer: java.io.ByteArrayInputStream? = null
                         private var isClosed = false
                         
+                        private fun loadNextFrame(): Boolean {
+                            val frame = currentFrame
+                            if (frame == null) {
+                                try { Thread.sleep(10) } catch (e: Exception) { return false }
+                                return true
+                            }
+                            try {
+                                val header = "--jpgboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.size}\r\n\r\n"
+                                val outputStream = ByteArrayOutputStream(header.length + frame.size + 4)
+                                outputStream.write(header.toByteArray())
+                                outputStream.write(frame)
+                                outputStream.write("\r\n".toByteArray())
+                                buffer = java.io.ByteArrayInputStream(outputStream.toByteArray())
+                                return true
+                            } catch (e: Exception) {
+                                return false
+                            }
+                        }
+
                         override fun read(): Int {
                             if (isClosed) return -1
-                            
                             while (buffer == null || buffer?.available() == 0) {
                                 if (isClosed) return -1
-                                val frame = currentFrame
-                                if (frame == null) {
-                                    try { Thread.sleep(50) } catch (e: Exception) { return -1 }
-                                    continue
-                                }
-                                
-                                try {
-                                    val header = "--jpgboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.size}\r\n\r\n"
-                                    val outputStream = ByteArrayOutputStream()
-                                    outputStream.write(header.toByteArray())
-                                    outputStream.write(frame)
-                                    outputStream.write("\r\n".toByteArray())
-                                    buffer = java.io.ByteArrayInputStream(outputStream.toByteArray())
-                                } catch (e: Exception) {
-                                    return -1
-                                }
+                                if (!loadNextFrame()) return -1
                             }
                             return buffer?.read() ?: -1
+                        }
+
+                        override fun read(b: ByteArray, off: Int, len: Int): Int {
+                            if (isClosed) return -1
+                            while (buffer == null || buffer?.available() == 0) {
+                                if (isClosed) return -1
+                                if (!loadNextFrame()) return -1
+                            }
+                            return buffer?.read(b, off, len) ?: -1
                         }
 
                         override fun close() {
@@ -946,14 +1144,46 @@ class MainActivity : AppCompatActivity() {
                     response.addHeader("Access-Control-Allow-Origin", "*")
                     return response
                 }
+                session.uri == "/help" -> {
+                    val helpText = """
+                        AWA Remote Control - API Guide
+                        
+                        Endpoints:
+                        1. /video
+                           - MJPEG video stream.
+                           - Example: <img src="http://192.168.1.x:8080/video">
+                        
+                        2. /features
+                           - Returns JSON with camera capabilities (resolutions, focus support, exposure range, zoom limit).
+                           - Example: fetch('/features').then(r => r.json())
+                        
+                        3. /settings
+                           - Returns JSON with current active settings.
+                           - Example: fetch('/settings').then(r => r.json())
+                        
+                        4. /control
+                           - Modifies camera settings via query parameters.
+                           - Supported params: focus_mode (0=Auto, 1=Tap, 2=Manual), focus_distance (0-1000), exposure_index (int), zoom (float), stream_quality (10-100), flip (true/false), resolution_str (e.g. "1920x1080").
+                           - Example: fetch('/control?zoom=2.0&focus_mode=2&focus_distance=500')
+                           
+                        5. /
+                           - Web Dashboard UI.
+                    """.trimIndent()
+                    val response = newFixedLengthResponse(Response.Status.OK, "text/plain", helpText)
+                    response.addHeader("Access-Control-Allow-Origin", "*")
+                    return response
+                }
                 session.uri == "/settings" -> {
                     val resStr = resolutionSpinner.selectedItem?.toString() ?: "Unknown"
                     val expIndex = camera?.cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
+                    val zoomRatio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1.0f
                     val settings = """
                         {
                             "focus_mode": $focusMode,
                             "focus_distance": ${focusSeekBar.progress},
                             "exposure_index": $expIndex,
+                            "zoom": $zoomRatio,
+                            "stream_quality": $streamQuality,
                             "flip": $isFrontCamera,
                             "resolution_str": "$resStr"
                         }
@@ -986,12 +1216,30 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     params["exposure_index"]?.firstOrNull()?.toIntOrNull()?.let { exp ->
+                        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                        if (prefs.getBoolean("save_exposure", true)) {
+                            prefs.edit().putInt("last_exposure", exp).apply()
+                        }
                         camera?.cameraControl?.setExposureCompensationIndex(exp)
                         runOnUiThread {
                             camera?.cameraInfo?.exposureState?.let { state ->
                                 val lower = state.exposureCompensationRange.lower
                                 exposureSeekBar.progress = exp - lower
                             }
+                        }
+                    }
+
+                    params["zoom"]?.firstOrNull()?.toFloatOrNull()?.let { zoom ->
+                        camera?.cameraControl?.setZoomRatio(zoom)
+                    }
+
+                    params["stream_quality"]?.firstOrNull()?.toIntOrNull()?.let { q ->
+                        val validQ = q.coerceIn(10, 100)
+                        streamQuality = validQ
+                        getSharedPreferences("settings", MODE_PRIVATE).edit().putInt("stream_quality", validQ).apply()
+                        runOnUiThread {
+                            qualitySeekBar.progress = validQ - 10
+                            qualityLabel.text = "Stream Quality ($validQ%)"
                         }
                     }
 
@@ -1027,6 +1275,8 @@ class MainActivity : AppCompatActivity() {
                                 button { background: #2d3748; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin: 4px; transition: background 0.2s; }
                                 button:hover { background: #4a5568; }
                                 button.active { background: #6366f1; }
+                                button.danger { background: #c53030; }
+                                button.danger:hover { background: #9b2c2c; }
                                 button:disabled { opacity: 0.3; cursor: not-allowed; }
                                 input[type=range] { width: 100%; margin-top: 10px; }
                                 input[type=range]:disabled { opacity: 0.3; }
@@ -1038,9 +1288,11 @@ class MainActivity : AppCompatActivity() {
                             <h1 style="color: #6366F1; margin-bottom: 5px;">AWA REMOTE</h1>
                             <div class="status status-live" id="connectionStatus">CONNECTING...</div>
                             
-                            <div class="container">
-                                <img id="stream" src="$streamUrl" alt="Camera Stream">
+                            <div class="container" id="videoContainer">
+                                <img id="stream" alt="Camera Stream">
                             </div>
+                            
+                            <button id="togglePreviewBtn" class="danger" style="margin-bottom: 20px;" onclick="togglePreview()">Start Preview</button>
 
                             <div class="controls">
                                 <div class="control-group">
@@ -1056,6 +1308,14 @@ class MainActivity : AppCompatActivity() {
                                 <div class="control-group">
                                     <h3>Exposure</h3>
                                     <input type="range" id="exposureDist" min="0" max="0" value="0" oninput="ctrl('exposure_index=' + this.value)">
+                                </div>
+                                <div class="control-group">
+                                    <h3>Zoom: <span id="zVal">1.0</span>x</h3>
+                                    <input type="range" id="zoomDist" min="1.0" max="1.0" step="0.1" value="1.0" oninput="document.getElementById('zVal').innerText=this.value; ctrl('zoom=' + this.value)">
+                                </div>
+                                <div class="control-group">
+                                    <h3>Stream Quality: <span id="qVal">70</span>%</h3>
+                                    <input type="range" id="qualityDist" min="10" max="100" value="70" oninput="document.getElementById('qVal').innerText=this.value; ctrl('stream_quality=' + this.value)">
                                 </div>
                                 <div class="control-group">
                                     <h3>Camera</h3>
@@ -1114,6 +1374,12 @@ class MainActivity : AppCompatActivity() {
                                             expInput.disabled = true;
                                         }
 
+                                        // Update zoom
+                                        const zInput = document.getElementById('zoomDist');
+                                        zInput.max = data.zoom_max;
+                                        if (data.zoom_max <= 1.0) zInput.disabled = true;
+                                        else zInput.disabled = false;
+
                                         // Update resolution buttons if list changed
                                         if (JSON.stringify(data.resolutions) !== JSON.stringify(currentResolutions)) {
                                             currentResolutions = data.resolutions;
@@ -1138,6 +1404,18 @@ class MainActivity : AppCompatActivity() {
                                         document.getElementById('focusDist').value = data.focus_distance;
                                         document.getElementById('exposureDist').value = data.exposure_index;
                                         
+                                        const zDist = document.getElementById('zoomDist');
+                                        if (document.activeElement !== zDist) {
+                                            zDist.value = data.zoom;
+                                            document.getElementById('zVal').innerText = parseFloat(data.zoom).toFixed(1);
+                                        }
+                                        
+                                        const qDist = document.getElementById('qualityDist');
+                                        if (document.activeElement !== qDist) {
+                                            qDist.value = data.stream_quality;
+                                            document.getElementById('qVal').innerText = data.stream_quality;
+                                        }
+                                        
                                         document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
                                         if(document.getElementById('c_'+data.flip)) document.getElementById('c_'+data.flip).classList.add('active');
                                         
@@ -1159,15 +1437,52 @@ class MainActivity : AppCompatActivity() {
 
                                 const img = document.getElementById('stream');
                                 const status = document.getElementById('connectionStatus');
+                                const toggleBtn = document.getElementById('togglePreviewBtn');
+                                const videoContainer = document.getElementById('videoContainer');
+                                
+                                let isPreviewing = false;
+                                
+                                // Initially hide the video container and set status
+                                videoContainer.style.display = 'none';
+                                status.textContent = "PREVIEW PAUSED";
+                                status.style.background = "#4a5568";
+
+                                function togglePreview() {
+                                    isPreviewing = !isPreviewing;
+                                    
+                                    if (isPreviewing) {
+                                        videoContainer.style.display = 'block';
+                                        img.src = "$streamUrl?t=" + Date.now();
+                                        toggleBtn.textContent = "Stop Preview";
+                                        toggleBtn.classList.add('danger');
+                                        toggleBtn.classList.remove('active');
+                                        status.textContent = "CONNECTING...";
+                                        status.style.background = "#c53030";
+                                    } else {
+                                        videoContainer.style.display = 'none';
+                                        img.src = ""; // Clear source to immediately stop stream
+                                        toggleBtn.textContent = "Start Preview";
+                                        toggleBtn.classList.remove('danger');
+                                        toggleBtn.classList.add('active');
+                                        status.textContent = "PREVIEW PAUSED";
+                                        status.style.background = "#4a5568";
+                                    }
+                                }
                                 
                                 img.onerror = () => {
-                                    status.textContent = "DISCONNECTED";
-                                    status.style.background = "#4a5568";
-                                    setTimeout(() => { img.src = "/video?t=" + Date.now(); }, 2000);
+                                    if (isPreviewing) {
+                                        status.textContent = "DISCONNECTED";
+                                        status.style.background = "#4a5568";
+                                        setTimeout(() => { 
+                                            if(isPreviewing) img.src = "$streamUrl?t=" + Date.now(); 
+                                        }, 2000);
+                                    }
                                 };
                                 img.onload = () => {
-                                    status.textContent = "LIVE STREAM";
-                                    status.style.background = "#c53030";
+                                    if (isPreviewing) {
+                                        status.textContent = "LIVE STREAM";
+                                        status.style.background = "#c53030";
+                                    }
                                 };
                             </script>
                         </body>
@@ -1214,6 +1529,8 @@ class MainActivity : AppCompatActivity() {
             val expUpper = aeRange?.upper ?: 0
             val expStep = chars.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
 
+            val maxZoom = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
+
             val resJson = resList.joinToString(",") { "\"$it\"" }
             
             return """
@@ -1223,6 +1540,7 @@ class MainActivity : AppCompatActivity() {
                     "exposure_lower": $expLower,
                     "exposure_upper": $expUpper,
                     "exposure_step": $expStep,
+                    "zoom_max": $maxZoom,
                     "camera": "${if (front) "front" else "back"}"
                 }
             """.trimIndent()
@@ -1231,9 +1549,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (isServerRunning && !isDimmed()) {
+            preview?.setSurfaceProvider(previewView.surfaceProvider)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Extremely important for background streams:
+        // Detach the hardware surface before the OS destroys the Activity Window.
+        // If we don't do this, CameraX crashes or stalls when it loses the display!
+        preview?.setSurfaceProvider(null)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        stopServer()
-        cameraExecutor.shutdown()
+        if (instance == this) instance = null
+        // Do NOT stop the server or shutdown the executor if the service is running
+        // This allows the background stream to survive the Activity being destroyed.
+        if (!isServerRunning) {
+            stopServer()
+            cameraExecutor.shutdown()
+        }
     }
 }

@@ -14,14 +14,26 @@ class WebcamService : LifecycleService() {
     companion object {
         const val CHANNEL_ID = "WebcamServiceChannel"
         const val NOTIFICATION_ID = 1
+        var instance: WebcamService? = null
     }
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         createNotificationChannel()
+    }
+    
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "STOP_SERVER") {
+            MainActivity.stopServerGlobally(this)
+            return START_NOT_STICKY
+        }
+        
         super.onStartCommand(intent, flags, startId)
         
         val notificationIntent = Intent(this, MainActivity::class.java)
@@ -30,15 +42,22 @@ class WebcamService : LifecycleService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_IMMUTABLE else 0
         )
 
+        val stopIntent = Intent(this, WebcamService::class.java).apply { action = "STOP_SERVER" }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 1, stopIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_IMMUTABLE else 0
+        )
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AWA Server Running")
             .setContentText("Camera stream is active in the background.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Server", stopPendingIntent)
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
         } else {
             startForeground(NOTIFICATION_ID, notification)

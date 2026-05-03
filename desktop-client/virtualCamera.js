@@ -1,166 +1,139 @@
 /*
  * Copyright © 2026 Soubhagyajit Borah
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License.
+ * License: GNU General Public License v3.0
  */
 
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const { ipcMain, app } = require('electron');
 const path = require('path');
-const os = require('os');
+const fs = require('fs');
 
-let pythonProcess = null;
+let senderProcess = null;
 let isVirtualCameraRunning = false;
 
-function getPythonCommand() {
-    return os.platform() === 'win32' ? 'python' : 'python3';
-}
-
-// Start virtual camera
-function startVirtualCamera(streamUrl, width = 1280, height = 720, fps = 30) {
-    if (isVirtualCameraRunning) {
-        return {
-            success: false,
-            message: 'Virtual camera already running'
-        };
-    }
-    
-    try {
-        const pythonCmd = getPythonCommand();
-        const isDev = !app.isPackaged;
-        const scriptPath = isDev 
-            ? path.join(__dirname, 'virtual_webcam.py') 
-            : path.join(process.resourcesPath, 'virtual_webcam.py');
-        
-        console.log(`[Virtual Camera] Using script at: ${scriptPath}`);
-        
-        // Start Python script
-        pythonProcess = spawn(pythonCmd, [
-            scriptPath,
-            streamUrl,
-            width.toString(),
-            height.toString(),
-            fps.toString()
-        ]);
-        
-        // Capture output
-        pythonProcess.stdout.on('data', (data) => {
-            console.log(`[Virtual Camera] ${data.toString().trim()}`);
-        });
-        
-        pythonProcess.stderr.on('data', (data) => {
-            console.error(`[Virtual Camera Error] ${data.toString().trim()}`);
-        });
-        
-        pythonProcess.on('close', (code) => {
-            console.log(`[Virtual Camera] Process exited with code ${code}`);
-            isVirtualCameraRunning = false;
-        });
-        
-        pythonProcess.on('error', (err) => {
-            console.error(`[Virtual Camera] Failed to start: ${err.message}`);
-            isVirtualCameraRunning = false;
-        });
-        
-        isVirtualCameraRunning = true;
-        
-        return {
-            success: true,
-            message: 'Virtual camera started successfully'
-        };
-        
-    } catch (error) {
-        return {
-            success: false,
-            message: `Failed to start: ${error.message}`
-        };
-    }
-}
-// Stop virtual camera
-function stopVirtualCamera() {
-    if (pythonProcess) {
-        pythonProcess.kill('SIGTERM');
-        pythonProcess = null;
-        isVirtualCameraRunning = false;
-        
-        return {
-            success: true,
-            message: 'Virtual camera stopped'
-        };
-    }
-    
-    return {
-        success: false,
-        message: 'Virtual camera not running'
-    };
-}
-
-// Check if virtual camera is available
-async function checkVirtualCamera() {
+/**
+ * Automatically detects the resolution of the incoming stream.
+ */
+async function getStreamResolution(url) {
     return new Promise((resolve) => {
-        const pythonCmd = getPythonCommand();
-        const checkScript = 'import pyvirtualcam; print("OK")';
-        
-        const proc = spawn(pythonCmd, ['-c', checkScript]);
-        
-        let output = '';
-        proc.stdout.on('data', (data) => {
-            output += data.toString();
-        });
-        
-        proc.on('close', (code) => {
-            if (code === 0 && output.includes('OK')) {
-                resolve({
-                    installed: true,
-                    message: 'pyvirtualcam is ready'
-                });
+        const cmd = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${url}"`;
+        exec(cmd, (error, stdout) => {
+            if (error || !stdout) {
+                console.warn("[V-Cam] Resolution detection failed, falling back to 1280x720.");
+                resolve({ width: 1280, height: 720 });
             } else {
-                resolve({
-                    installed: false,
-                    message: 'pyvirtualcam not installed. Click to install automatically.'
-                });
+                const [w, h] = stdout.trim().split('x').map(Number);
+                console.log(`[V-Cam] Detected Stream Resolution: ${w}x${h}`);
+                resolve({ width: w, height: h });
             }
-        });
-        
-        proc.on('error', () => {
-            resolve({
-                installed: false,
-                message: 'Python not found. Click to install automatically.'
-            });
         });
     });
 }
 
-// IPC Handlers
+async function startVirtualCamera(streamUrl, userWidth, userHeight, fps = 30) {
+    if (isVirtualCameraRunning) return { success: false, message: 'Already running' };
+
+    try {
+        const isDev = !app.isPackaged;
+        const baseDir = isDev ? __dirname : process.resourcesPath;
+        const senderPath = path.join(baseDir, 'sender.exe');
+
+        // Logic: Use user-provided resolution, otherwise auto-detect
+        const detected = await getStreamResolution(streamUrl);
+        const width = userWidth || detected.width;
+        const height = userHeight || detected.height;
+
+        // Spawn sender.exe — it handles stream capture + softcam feeding internally
+        senderProcess = spawn(senderPath, [
+            width.toString(),
+            height.toString(),
+            fps.toString()
+        ], {
+            cwd: baseDir,
+            env: { ...process.env, PATH: `${baseDir};${process.env.PATH}` },
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        senderProcess.stdout.on('data', (data) => console.log(`[C++ Bridge] ${data}`));
+        senderProcess.stderr.on('data', (data) => console.error(`[C++ Bridge] ${data}`));
+
+        senderProcess.on('close', (code) => {
+            console.log(`[V-Cam] sender.exe exited (Code: ${code})`);
+            stopVirtualCamera();
+        });
+
+        senderProcess.on('error', (err) => {
+            console.error(`[V-Cam] Failed to start sender.exe: ${err.message}`);
+            stopVirtualCamera();
+        });
+
+        isVirtualCameraRunning = true;
+        return { success: true, resolution: `${width}x${height}` };
+
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+}
+
+function stopVirtualCamera() {
+    let closed = false;
+    if (senderProcess) {
+        // 'taskkill /t' ensures any child processes spawned by sender.exe are also killed
+        spawn('taskkill', ['/pid', senderProcess.pid, '/f', '/t'], { shell: true });
+        senderProcess = null;
+        closed = true;
+    }
+    isVirtualCameraRunning = false;
+    return { success: closed };
+}
+
+async function checkVirtualCamera() {
+    const isDev = !app.isPackaged;
+    const baseDir = isDev ? __dirname : process.resourcesPath;
+    const senderPath = path.join(baseDir, 'sender.exe');
+    const dllPath = path.join(baseDir, 'softcam.dll');
+
+    const senderExists = fs.existsSync(senderPath);
+    const dllExists = fs.existsSync(dllPath);
+
+    if (senderExists && dllExists) {
+        return { installed: true, message: 'C++ Bridge Ready' };
+    } else {
+        return {
+            installed: false,
+            message: `Missing: ${!senderExists ? 'sender.exe ' : ''}${!dllExists ? 'softcam.dll' : ''}`
+        };
+    }
+}
+
 function setupVirtualCameraIPC() {
     ipcMain.on('check-virtual-camera', async (event) => {
         const result = await checkVirtualCamera();
         event.reply('virtual-camera-check-result', result);
     });
-    
-    ipcMain.on('start-virtual-camera', (event, streamUrl, width, height, fps) => {
-        const result = startVirtualCamera(streamUrl, width, height, fps);
-        event.reply('virtual-camera-status', result);
+
+    ipcMain.on('start-virtual-camera', async (event, streamUrl, width, height, fps) => {
+        const result = await startVirtualCamera(streamUrl, width, height, fps);
+
+        event.reply('virtual-camera-status', {
+            success: result.success,
+            message: result.message || '',
+            resolution: result.resolution || ''
+        });
     });
-    
+
     ipcMain.on('stop-virtual-camera', (event) => {
         const result = stopVirtualCamera();
         event.reply('virtual-camera-status', result);
     });
-    
+
     ipcMain.on('get-virtual-camera-status', (event) => {
         event.reply('virtual-camera-running', isVirtualCameraRunning);
     });
 }
 
-// Cleanup
 function cleanupVirtualCamera() {
-    if (pythonProcess) {
-        pythonProcess.kill('SIGTERM');
-        pythonProcess = null;
-    }
-    isVirtualCameraRunning = false;
+    stopVirtualCamera();
 }
 
 module.exports = {
