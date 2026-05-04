@@ -164,6 +164,7 @@ See the [LICENSE](LICENSE) file for full details.
 
 ## 🙏 Acknowledgments
 
+- Virtual camera powered by Softcam © tshino (MIT License)
 - Built with Kotlin, Electron.
 - Inspired by DroidCam and similar tools.
 - Made with ❤️ for the open-source community.
