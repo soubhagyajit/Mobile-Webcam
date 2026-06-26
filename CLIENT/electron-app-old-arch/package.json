@@ -26,6 +26,7 @@
     "nsis": {
       "oneClick": false,
       "perMachine": true,
+      "license": "../LICENSE",
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "build/icon.ico",

@@ -136,6 +136,21 @@
             android:visibility="gone" />
 
         <TextView
+            android:id="@+id/flashButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:text="FLASH"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="?attr/selectableItemBackground"
+            android:padding="4dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="gone" />
+
+        <TextView
             android:id="@+id/focusToggleButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -377,13 +392,32 @@
     <View android:id="@+id/idleOverlay" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" />
 
     <!-- Screen Dim Overlay -->
-    <View
+    <FrameLayout
         android:id="@+id/dimOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#FF000000"
         android:visibility="gone"
         android:clickable="true"
-        android:focusable="true" />
+        android:focusable="true">
+
+        <!-- Solid Black Background -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#FF000000" />
+
+        <!-- Hint Text (Faded in on touch) -->
+        <TextView
+            android:id="@+id/dimHintText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="SWIPE TO WAKE"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.1"
+            android:alpha="0" />
+    </FrameLayout>
 
 </FrameLayout>

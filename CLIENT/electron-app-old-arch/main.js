@@ -69,15 +69,15 @@ function showAdbInstructions(ins) {
             title: 'ADB Not Found',
             message: 'Android Debug Bridge (ADB) is not installed',
             detail: 'For USB mode, you need ADB.\n\n' +
-                    'Install Android Platform Tools:\n' +
-                    'https://developer.android.com/studio/releases/platform-tools\n\n' +
-                    'WiFi mode will still work without ADB.'
+                'Install Android Platform Tools:\n' +
+                'https://developer.android.com/studio/releases/platform-tools\n\n' +
+                'WiFi mode will still work without ADB.'
         },
         2: {
             title: 'Connection Error',
             message: 'Device Not Found',
             detail: "Can't connect to device — make sure USB is properly connected.\n" +
-                    'You can ignore this if you want to use WiFi mode.'
+                'You can ignore this if you want to use WiFi mode.'
         }
     };
 
@@ -100,11 +100,11 @@ async function checkAndSetupComponents() {
         // Quick pre-checks so we can decide whether to prompt at all
         const { ok: filesOk, missing } = autoInstaller.checkRequiredFiles();
         const vcRedistOk = await autoInstaller.checkVcRedist();
-        const softcamOk  = await autoInstaller.checkSoftcamRegistered();
+        const softcamOk = await autoInstaller.checkSoftcamRegistered();
 
-        console.log(`[Status] Required files : ${filesOk   ? 'OK' : 'MISSING — ' + missing.join(', ')}`);
+        console.log(`[Status] Required files : ${filesOk ? 'OK' : 'MISSING — ' + missing.join(', ')}`);
         console.log(`[Status] MSVC runtime   : ${vcRedistOk ? 'OK' : 'MISSING'}`);
-        console.log(`[Status] softcam driver : ${softcamOk  ? 'OK' : 'NOT REGISTERED'}`);
+        console.log(`[Status] softcam driver : ${softcamOk ? 'OK' : 'NOT REGISTERED'}`);
 
         // If files are missing there's nothing the installer can do — tell the user to reinstall
         if (!filesOk) {
@@ -113,8 +113,8 @@ async function checkAndSetupComponents() {
                 title: 'Installation Corrupted',
                 message: 'Required files are missing',
                 detail: `The following files are missing from the application folder:\n\n` +
-                        missing.map(f => `• ${f}`).join('\n') +
-                        '\n\nPlease reinstall Mobile Webcam.',
+                    missing.map(f => `• ${f}`).join('\n') +
+                    '\n\nPlease reinstall Mobile Webcam.',
                 buttons: ['OK']
             });
             return;
@@ -174,12 +174,12 @@ function showManualInstructions() {
         title: 'Manual Setup Instructions',
         message: 'Virtual Camera Setup',
         detail: 'Mobile Webcam needs two things to work:\n\n' +
-                '1. Microsoft MSVC Runtime (VC++ 2022 x64)\n' +
-                '   Download and run vc_redist.x64.exe from Microsoft.\n\n' +
-                '2. Virtual Camera Driver (softcam.dll)\n' +
-                '   Open a Command Prompt as Administrator and run:\n' +
-                '   regsvr32 "<install folder>\\resources\\softcam.dll"\n\n' +
-                'Restart the app after completing these steps.',
+            '1. Microsoft MSVC Runtime (VC++ 2022 x64)\n' +
+            '   Download and run vc_redist.x64.exe from Microsoft.\n\n' +
+            '2. Virtual Camera Driver (softcam.dll)\n' +
+            '   Open a Command Prompt as Administrator and run:\n' +
+            '   regsvr32 "<install folder>\\resources\\softcam.dll"\n\n' +
+            'Restart the app after completing these steps.',
         buttons: ['Download VC++ Runtime', 'Close']
     }).then((result) => {
         if (result.response === 0) {
@@ -287,9 +287,26 @@ const menuTemplate = [
             {
                 label: 'Manual Setup Instructions',
                 click: () => showManualInstructions()
+            },
+            {
+                label: 'About',
+                click: () => {
+                    dialog.showMessageBox(mainWindow, {
+                        type: 'info',
+                        title: 'About AWC',
+                        message: 'AWC - Android Webcam Client',
+                        detail: 'Copyright © 2026 Soubhagyajit Borah\n' +
+                            'Licensed under GPL-3.0\n\n' +
+                            'Third-party components:\n' +
+                            '• Softcam by tshino (MIT License)\n' +
+                            '  https://github.com/tshino/softcam',
+                        buttons: ['OK']
+                    });
+                }
             }
         ]
     }
+
 ];
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────

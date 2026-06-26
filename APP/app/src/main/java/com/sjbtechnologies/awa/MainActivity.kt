@@ -62,11 +62,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var qualitySeekBar: SeekBar
     private lateinit var qualityLabel: TextView
     private lateinit var dimOverlay: View
+    private lateinit var dimHintText: TextView
     private lateinit var focusRing: ImageView
     private lateinit var gridButton: TextView
     private lateinit var gridLines: View
     
     private lateinit var expButton: TextView
+    private lateinit var flashButton: TextView
     private lateinit var focusToggleButton: TextView
     private lateinit var focusContainer: View
     private lateinit var focusSeekBar: SeekBar
@@ -77,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     
     private var focusMode = 0 // 0: Auto, 1: Tap, 2: Manual
     private var streamQuality = 70
+    private var isFlashOn = false
     
     private var dimHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var dimRunnable = Runnable { showDimOverlay() }
@@ -157,11 +160,13 @@ class MainActivity : AppCompatActivity() {
         qualitySeekBar = findViewById(R.id.qualitySeekBar)
         qualityLabel = findViewById(R.id.qualityLabel)
         dimOverlay = findViewById(R.id.dimOverlay)
+        dimHintText = findViewById(R.id.dimHintText)
         focusRing = findViewById(R.id.focusRing)
         gridButton = findViewById(R.id.gridButton)
         gridLines = findViewById(R.id.gridLines)
         
         expButton = findViewById(R.id.expButton)
+        flashButton = findViewById(R.id.flashButton)
         focusToggleButton = findViewById(R.id.focusToggleButton)
         focusContainer = findViewById(R.id.focusContainer)
         focusSeekBar = findViewById(R.id.focusSeekBar)
@@ -172,6 +177,8 @@ class MainActivity : AppCompatActivity() {
         expButton.setOnClickListener {
             exposureContainer.visibility = if (exposureContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
+
+        flashButton.setOnClickListener { toggleFlash() }
 
         scaleGestureDetector = android.view.ScaleGestureDetector(this, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: android.view.ScaleGestureDetector): Boolean {
@@ -303,8 +310,44 @@ class MainActivity : AppCompatActivity() {
 
         flipButton.setOnClickListener { flipCamera() }
 
-        dimOverlay.setOnClickListener {
-            hideDimOverlay()
+        var dimStartX = 0f
+        dimOverlay.setOnTouchListener { v, event ->
+            when (event.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    dimStartX = event.rawX
+                    dimHintText.animate().alpha(0.6f).setDuration(150).start()
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val deltaX = event.rawX - dimStartX
+                    v.translationX = deltaX
+                    val fraction = Math.abs(deltaX) / v.width.toFloat()
+                    v.alpha = 1f - (fraction * 0.5f) // Slowly fade out as it slides
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    dimHintText.animate().alpha(0f).setDuration(250).start()
+                    if (Math.abs(v.translationX) > v.width * 0.4f) {
+                        // Swiped past 40% threshold - animate off screen and wake
+                        val endX = if (v.translationX > 0) v.width.toFloat() else -v.width.toFloat()
+                        v.animate()
+                            .translationX(endX)
+                            .alpha(0f)
+                            .setDuration(250)
+                            .withEndAction { hideDimOverlay() }
+                            .start()
+                    } else {
+                        // Snap back if released early
+                        v.animate()
+                            .translationX(0f)
+                            .alpha(1f)
+                            .setDuration(250)
+                            .start()
+                    }
+                    true
+                }
+                else -> false
+            }
         }
 
         updateUiState(false)
@@ -327,6 +370,9 @@ class MainActivity : AppCompatActivity() {
     private fun isDimmed(): Boolean = dimOverlay.visibility == View.VISIBLE
 
     private fun showDimOverlay() {
+        dimOverlay.translationX = 0f
+        dimOverlay.alpha = 1f
+        dimHintText.alpha = 0f
         dimOverlay.visibility = View.VISIBLE
         // Detach surface to pause rendering and save power/heat
         preview?.setSurfaceProvider(null)
@@ -479,6 +525,17 @@ class MainActivity : AppCompatActivity() {
             windowInsetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
             windowInsetsController.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun toggleFlash(state: Boolean? = null) {
+        isFlashOn = state ?: !isFlashOn
+        camera?.cameraControl?.enableTorch(isFlashOn)
+        runOnUiThread {
+            flashButton.setTextColor(if (isFlashOn) 
+                ContextCompat.getColor(this, android.R.color.holo_blue_light) 
+            else 
+                ContextCompat.getColor(this, android.R.color.white))
         }
     }
 
@@ -695,6 +752,15 @@ class MainActivity : AppCompatActivity() {
                 preview,
                 imageAnalyzer
             )
+            
+            // Setup Flash
+            if (camera?.cameraInfo?.hasFlashUnit() == true) {
+                runOnUiThread { flashButton.visibility = View.VISIBLE }
+                camera?.cameraControl?.enableTorch(isFlashOn)
+            } else {
+                runOnUiThread { flashButton.visibility = View.GONE }
+                isFlashOn = false
+            }
             
             // Setup exposure slider
             camera?.cameraInfo?.exposureState?.let { exposureState ->
@@ -980,7 +1046,9 @@ class MainActivity : AppCompatActivity() {
     private fun setCamera(front: Boolean) {
         if (isFrontCamera != front) {
             isFrontCamera = front
+            isFlashOn = false
             runOnUiThread {
+                toggleFlash(false)
                 updateResolutionSpinner(front)
                 // Re-bind if camera is currently active
                 if (camera != null) {
@@ -1185,6 +1253,7 @@ class MainActivity : AppCompatActivity() {
                             "zoom": $zoomRatio,
                             "stream_quality": $streamQuality,
                             "flip": $isFrontCamera,
+                            "flash": $isFlashOn,
                             "resolution_str": "$resStr"
                         }
                     """.trimIndent()
@@ -1241,6 +1310,10 @@ class MainActivity : AppCompatActivity() {
                             qualitySeekBar.progress = validQ - 10
                             qualityLabel.text = "Stream Quality ($validQ%)"
                         }
+                    }
+
+                    params["flash"]?.firstOrNull()?.toBoolean()?.let { f ->
+                        runOnUiThread { toggleFlash(f) }
                     }
 
                     params["flip"]?.firstOrNull()?.toBoolean()?.let { front ->
@@ -1321,6 +1394,10 @@ class MainActivity : AppCompatActivity() {
                                     <h3>Camera</h3>
                                     <button onclick="ctrl('flip=false', this)" class="cam-btn" id="c_false">Back</button>
                                     <button onclick="ctrl('flip=true', this)" class="cam-btn" id="c_true">Front</button>
+                                    <br><br>
+                                    <h3 id="flashSupport">Flash</h3>
+                                    <button onclick="ctrl('flash=false', this)" class="flash-btn" id="fl_false">Off</button>
+                                    <button onclick="ctrl('flash=true', this)" class="flash-btn" id="fl_true">On</button>
                                 </div>
                                 <div class="control-group">
                                     <h3>Resolution</h3>
@@ -1379,6 +1456,17 @@ class MainActivity : AppCompatActivity() {
                                         zInput.max = data.zoom_max;
                                         if (data.zoom_max <= 1.0) zInput.disabled = true;
                                         else zInput.disabled = false;
+                                        
+                                        // Update flash
+                                        if (data.flash_supported) {
+                                            document.getElementById('flashSupport').style.color = "#6366f1";
+                                            document.getElementById('fl_false').disabled = false;
+                                            document.getElementById('fl_true').disabled = false;
+                                        } else {
+                                            document.getElementById('flashSupport').style.color = "#f56565";
+                                            document.getElementById('fl_false').disabled = true;
+                                            document.getElementById('fl_true').disabled = true;
+                                        }
 
                                         // Update resolution buttons if list changed
                                         if (JSON.stringify(data.resolutions) !== JSON.stringify(currentResolutions)) {
@@ -1418,6 +1506,9 @@ class MainActivity : AppCompatActivity() {
                                         
                                         document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
                                         if(document.getElementById('c_'+data.flip)) document.getElementById('c_'+data.flip).classList.add('active');
+                                        
+                                        document.querySelectorAll('.flash-btn').forEach(b => b.classList.remove('active'));
+                                        if(document.getElementById('fl_'+data.flash)) document.getElementById('fl_'+data.flash).classList.add('active');
                                         
                                         document.querySelectorAll('.res-btn').forEach(b => {
                                             b.classList.toggle('active', b.textContent === data.resolution_str);
@@ -1530,6 +1621,8 @@ class MainActivity : AppCompatActivity() {
             val expStep = chars.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
 
             val maxZoom = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1.0f
+            
+            val hasFlash = chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
 
             val resJson = resList.joinToString(",") { "\"$it\"" }
             
@@ -1541,6 +1634,7 @@ class MainActivity : AppCompatActivity() {
                     "exposure_upper": $expUpper,
                     "exposure_step": $expStep,
                     "zoom_max": $maxZoom,
+                    "flash_supported": $hasFlash,
                     "camera": "${if (front) "front" else "back"}"
                 }
             """.trimIndent()
