@@ -21,11 +21,25 @@
     }
   },
   "bundle": {
+    "windows":{
+      "nsis":{
+          "installMode": "both"
+        }
+    },
+    "publisher": "SJBTechnologies Pvt. Ltd.",
     "active": true,
     "targets": "all",
     "icon": [
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [
+      "softcam.dll",
+      "opencv_videoio_ffmpeg4120_64.dll",
+      "opencv_world4120.dll"
+    ],
+    "externalBin":[
+      "sender"
+    ]    
   }
 }

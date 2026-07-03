@@ -1,9 +1,9 @@
 [package]
-name = "tauri-client"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-edition = "2021"
+name = "awc"
+version = "1.0.5"
+description = "Android Webcam Software - Desktop client"
+authors = ["Soubhagyajit Borah"]
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -21,5 +21,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1"
-
+tauri-plugin-process = "2"
+tauri-plugin-store = "2"

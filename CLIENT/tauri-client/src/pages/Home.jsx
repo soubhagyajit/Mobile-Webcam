@@ -4,33 +4,40 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 
 function Home() {
+    //app-version
     const [appVersion, setAppVersion] = useState('');
+
+    // connection settings
     const [mode, setMode] = useState('usb');
     const [serverIP, setServerIP] = useState('localhost');
     const [serverPort, setServerPort] = useState('8080');
     const [serverURL, setServerURL] = useState(`http://${serverIP}:${serverPort}`);
+    const [syncInterval, setSyncInterval] = useState(3000);
+
+    // connection states and indicators
     const [toast, setToast] = useState({ message: '', isError: false, visible: false })
     const [status, setStatus] = useState({ message: 'Ready to connect.', state: 'idle' });
     const [isConnected, setIsConnected] = useState(false);
+    const [modeIndicator, setModeIndicator] = useState('standby')
 
-
+    // UI states
     const [connectButtonText, setConnectButtonText] = useState('Connect');
     const [connectButtonDisable, setConnectButtonDisable] = useState(false);
 
+    // settings
+    const [deviceFeatures, setDeviceFeatures] = useState(null)
+    const [deviceSettings, setDeviceSettings] = useState({ focus_mode: 0, focus_distance: 0, exposure_index: 1, zoom: 1.0, stream_quality: 100, flip: false, resolution_str: "1920x1080" })
+    const [virtualCamActive, setVirtualCamActive] = useState(false)
 
     const [showControls, setShowControls] = useState(false)
-    const [virtualCamActive, setVirtualCamActive] = useState(false)
-    const [modeIndicator, setModeIndicator] = useState('standby') // 'standby' | 'streaming'
-
-    const [deviceFeatures, setDeviceFeatures] = useState(null)
     const [resolutions, setResolutions] = useState([])
     const [isFrontCamera, setIsFrontCamera] = useState(false)
     const [manualFocus, setManualFocus] = useState(false)
-    const [focusMode, setFocusMode] = useState('0') // 0: AUTO, 2: MANUAL
+    const [focusMode, setFocusMode] = useState('0')
     const [manualFocusValue, setManualFocusValue] = useState(0)
     const [exposure, setExposure] = useState({ value: 0, min: 0, max: 0, disabled: true })
 
-    const [deviceSettings, setDeviceSettings] = useState(null)
+
 
     const videoRef = useRef(null);
     const syncSettingsInterval = useRef(null)
@@ -64,25 +71,15 @@ function Home() {
     }, [serverIP, serverPort])
 
     useEffect(() => {
-        if (manualFocus == true) {
-            setFocusMode('2');
-        }
-        else if (manualFocus == false) {
-            setFocusMode('0');
-        }
-        else {
-            setFocusMode('0');
-        }
-    }, [manualFocus])
-
-    useEffect(() => {
-        // console.log(deviceSettings)
         if (!isConnected) return;
-        console.log("Entered");
+        console.log(deviceFeatures)
+        console.log(deviceSettings)
+        console.log(focusMode)
         setManualFocusValue(deviceSettings.focus_distance);
         setFocusMode(deviceSettings.focus_mode.toString());
-        setExposure(e => ({...e, value: deviceSettings.exposure_index}))
-    }, [deviceSettings])
+        setExposure(e => ({ ...e, value: deviceSettings.exposure_index }))
+    }, [deviceSettings, deviceFeatures])
+
     const showToast = (message, isError = false) => {
         setToast({ message, isError, visible: true })
         setTimeout(() => setToast(t => ({ ...t, visible: false })), 3000)
@@ -169,8 +166,10 @@ function Home() {
     const initializeDeviceSync = async () => {
         await fetchFeatures()
         await fetchSettings()
-        syncSettingsInterval.current = setInterval(fetchSettings, 3000)
-        syncFeaturesInterval.current = setInterval(fetchFeatures, 3000)
+        if (syncInterval != 0){
+            syncSettingsInterval.current = setInterval(fetchSettings, syncInterval)
+            syncFeaturesInterval.current = setInterval(fetchFeatures, syncInterval)
+        }
     }
 
     const fetchFeatures = async () => {
@@ -193,6 +192,7 @@ function Home() {
             console.error('Failed to fetch features:', err)
             showToast('Could not load device features', true)
         }
+
     }
 
     const fetchSettings = async () => {
@@ -399,8 +399,9 @@ function Home() {
                         </div>
                     </div>
 
+                    
                     <div id="videoStreamDiv" className={`${isConnected ? 'block' : 'hidden'} relative w-full h-full flex items-center justify-center`}>
-                        <img ref={videoRef} id="videoStream" className="max-w-full max-h-full rounded-2xl border border-slate-700/50 video-glow object-contain transition-all duration-500" alt="Stream" src={serverURL} />
+                        <img ref={videoRef} id="videoStream" className="max-w-full max-h-full rounded-2xl border border-slate-700/50 video-glow object-contain transition-all duration-500" alt="Stream"/>
                     </div>
                 </div>
 
