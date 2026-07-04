@@ -15,7 +15,7 @@ This is a **complete professional solution** with:
 ## 🧩 Components
 
 ### 💻 AWC — Desktop Client
-Electron-based app that connects to your phone and outputs virtual webcam.
+Tauri-based app that connects to your phone and outputs virtual webcam.
 
 ### 📱 AWA — Android App
 Kotlin-based mobile app that acts as the streaming server.
@@ -30,7 +30,7 @@ Kotlin-based mobile app that acts as the streaming server.
 - Low battery usage
 
 ### Desktop Client
-- Virtual webcam device (works with Zoom, Teams, Meet, OBS, etc.)
+- Virtual webcam device (works with Zoom, Teams, Meet, OBS, etc.) ***
 - Clean, modern UI
 - Connection statistics
 
@@ -41,9 +41,8 @@ Kotlin-based mobile app that acts as the streaming server.
 ## 📋 Prerequisites
 
 ### Required
-- **PC**: Windows 10+, macOS 10.14+, or Linux
+- **PC**: Windows 10+, (*Planned for* macOS and Linux)
 - **Phone**: Android 7.0+
-- **Python**: Version 3.10 or higher
 
 ### For Development
 - **Android Studio** (for Android builds)
@@ -51,12 +50,7 @@ Kotlin-based mobile app that acts as the streaming server.
 - Or your favourite software for developement
 
 
-## 📚 Documentation
-
-- **[QUICKSTART.md](QUICKSTART.md)** - Get running in minutes
-- **[USB_CONNECTION.md](USB_CONNECTION.md)** - USB connection setup
-
-## 🎥 Using as Virtual Webcam
+## 🎥 Using as Virtual Webcam ***
 
 The desktop client creates a virtual webcam that works with:
 
@@ -71,14 +65,14 @@ The desktop client creates a virtual webcam that works with:
 ### Windows Setup
 The virtual webcam should appear automatically in your video apps.
 
-### Mac Setup
+<!-- ### Mac Setup
 Grant camera permissions in System Preferences → Security & Privacy
 
 ### Linux Setup
 May require `v4l2loopback` kernel module:
 ```bash
 sudo apt-get install v4l2loopback-dkms
-```
+``` -->
 
 ## 🔧 Configuration
 
@@ -99,11 +93,6 @@ cd desktop-client
 # Windows
 npm run build:win
 
-# macOS
-npm run build:mac
-
-# Linux
-npm run build:linux
 ```
 
 ## 🐛 Troubleshooting
@@ -196,5 +185,7 @@ If you find this useful:
 - 🤝 Contribute improvements
 
 ---
+
+#### *** *Virtual webcam device is not included in client version v1.0.5 as I am investing an issue. I will soon release next version with Virtual camera included. If you need the Virtual camera, please install client version v1.0.4*
 
 **Happy streaming! Made with ❤️ and ☕ by developers, for developers.**

@@ -24,7 +24,7 @@ const REQUIRED_FILES: &[&str] = &[
 #[tauri::command]
 pub async fn init_installer(handle: AppHandle) {
     println!("Installer code on Rust initiated!");
-
+ 
     //step - 1:
 
     let (ok, missing) = check_required_files(&handle);

@@ -23,9 +23,11 @@
   "bundle": {
     "windows":{
       "nsis":{
-          "installMode": "both"
+          "installMode": "both",
+          "installerIcon": "./icons/icon.ico"
         }
     },
+    
     "publisher": "SJBTechnologies Pvt. Ltd.",
     "active": true,
     "targets": "all",
@@ -36,6 +38,8 @@
     "resources": [
       "softcam.dll",
       "adb/*"
-    ]   
+    ],
+    "license": "GPL-3.0",
+    "licenseFile": "../../../LICENSE"   
   }
 }
