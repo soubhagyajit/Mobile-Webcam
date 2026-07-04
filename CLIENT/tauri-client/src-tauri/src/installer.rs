@@ -15,10 +15,10 @@ struct Progress {
 }
 
 const REQUIRED_FILES: &[&str] = &[
-    "sender.exe",
+//     "sender.exe",
     "softcam.dll",
-    "opencv_world4120.dll",
-    "opencv_videoio_ffmpeg4120_64.dll",
+    // "opencv_world4120.dll",
+    // "opencv_videoio_ffmpeg4120_64.dll",
 ];
 
 #[tauri::command]

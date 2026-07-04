@@ -35,11 +35,7 @@
     ],
     "resources": [
       "softcam.dll",
-      "opencv_videoio_ffmpeg4120_64.dll",
-      "opencv_world4120.dll"
-    ],
-    "externalBin":[
-      "sender"
-    ]    
+      "adb/*"
+    ]   
   }
 }
