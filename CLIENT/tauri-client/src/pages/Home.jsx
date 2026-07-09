@@ -30,6 +30,7 @@ function Home() {
   });
   const [isConnected, setIsConnected] = useState(false);
   const [modeIndicator, setModeIndicator] = useState("standby");
+  const [vc, setVc] = useState(false);
 
   // UI states
   const [connectButtonText, setConnectButtonText] = useState("Connect");
@@ -130,6 +131,13 @@ function Home() {
     showToast(res, false);
   };
 
+  const handleVC = async () =>{
+    let i = vc ;
+    setVc(!i);
+    // await invoke("init_cam", {on:!i, height:480, width:640 });    
+    await invoke("init_cam", {on:!i, height:720, width:1280 });    
+  }
+  
   const showToast = (message, isError = false) => {
     setToast({ message, isError, visible: true });
     setTimeout(() => setToast((t) => ({ ...t, visible: false })), 3000);
@@ -601,18 +609,19 @@ function Home() {
             </div>
           )}
 
-          {/* <div className="space-y-3 pt-2 border-t border-slate-800">
+          <div className="space-y-3 pt-2 border-t border-slate-800">
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Tools
             </label>
             <button
               id="startVirtualCamBtn"
-              disabled
-              className="w-full border border-slate-700 hover:border-emerald-500/50 hover:bg-emerald-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30"
+              disabled = {false}
+              onClick={()=>{handleVC()}}
+              className={`w-full border  ${!vc && 'hover:border-emerald-500/50'} ${vc ? 'border-red-500':'border-slate-700'} ${vc && 'hover:bg-red-500/10'} ${!vc && 'hover:bg-emerald-500/10'}   text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30`}
             >
-              Start Camera Driver
+              {!vc ?"Start Virtual Cam":"Stop"}
             </button>
-          </div> */}
+          </div>
 
           <div className="mt-auto p-4 bg-slate-900/80 rounded-xl border border-slate-800/50 shrink-0">
             <div className="flex items-center justify-between mb-2">

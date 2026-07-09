@@ -1,6 +1,6 @@
 [package]
 name = "awc"
-version = "1.0.5"
+version = "1.0.6"
 description = "Android Webcam Software - Desktop client"
 authors = ["Soubhagyajit Borah"]
 edition = "2024"
@@ -21,7 +21,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+image = "0.25"
+zune-jpeg = "0.4"
 serde_json = "1"
 tauri-plugin-process = "2"
 tauri-plugin-store = "2"
