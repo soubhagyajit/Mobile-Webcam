@@ -48,13 +48,16 @@ function Home() {
     zoom: 1.0,
     stream_quality: 100,
     flip: false,
-    resolution_str: "1920x1080",
+    resolution_str: "1280x720",
   });
+
   const [virtualCamActive, setVirtualCamActive] = useState(false);
+  const [streamData, setStreamData] = useState({width:720, height:1280});
 
   const [showControls, setShowControls] = useState(false);
   const [resolutions, setResolutions] = useState([]);
   const [isFrontCamera, setIsFrontCamera] = useState(false);
+  const [isFlashOn, setFlashOn] = useState(false);
   const [manualFocus, setManualFocus] = useState(false);
   const [focusMode, setFocusMode] = useState("0");
   const [manualFocusValue, setManualFocusValue] = useState(0);
@@ -98,22 +101,27 @@ function Home() {
 
   useEffect(() => {
     if (!isConnected) return;
-    console.log(deviceFeatures);
-    console.log(deviceSettings);
-    console.log(focusMode);
+    // console.log(deviceFeatures);
+    // console.log(deviceSettings);
+    // console.log(focusMode);
     setManualFocusValue(deviceSettings.focus_distance);
     setFocusMode(deviceSettings.focus_mode.toString());
     setExposure((e) => ({ ...e, value: deviceSettings.exposure_index }));
   }, [deviceSettings, deviceFeatures]);
 
+  useEffect(()=>{
+    handleResolution();
+  },[deviceSettings.resolution_str])
+
   useEffect(() => {
-    const unlisten = listen("adb-process", (e) => {
-      console.log(e.payload);
-    });
-    return () => {
-      unlisten.then((f) => f());
+  const applyResolutionChange = async () => {
+      if (vc) {
+        await invoke("init_cam", { on: false, height: streamData.height, width: streamData.width });
+        await invoke("init_cam", { on: true, height: streamData.height, width: streamData.width });
+      }
     };
-  }, []);
+    applyResolutionChange();
+  }, [streamData.width, streamData.height]);
 
   const handleGetDevices = async () => {
     setDevicesLoading(true);
@@ -123,19 +131,25 @@ function Home() {
   };
 
   const handleDeviceSelect = async (e) => {
+    setDevicesLoading(true);
     const device = devices.find((device) => device.id === e.target.value);
     let res = await invoke("adb_connect_device", {
       deviceId: device.id,
       deviceModel: device.model,
     });
     showToast(res, false);
+    setDevicesLoading(false);
   };
 
   const handleVC = async () =>{
     let i = vc ;
     setVc(!i);
-    // await invoke("init_cam", {on:!i, height:480, width:640 });    
-    await invoke("init_cam", {on:!i, height:720, width:1280 });    
+    if (i === false){
+      await invoke("init_cam", {on:!i, height:streamData.height, width:streamData.width });
+    }
+    else{
+      await invoke("init_cam", {on:!i, height:streamData.height, width:streamData.width });
+    }
   }
   
   const showToast = (message, isError = false) => {
@@ -156,9 +170,7 @@ function Home() {
   };
 
   const handleConnect = () => {
-    console.log("Connect button pressed");
-    const url = serverURL;
-    console.log("URL:", url);
+    const url = serverURL; 
     if (!url) return showToast("Enter a URL first", true);
     if (url) showToast("Entered URL: " + url, true);
 
@@ -208,7 +220,6 @@ function Home() {
       clearInterval(syncFeaturesInterval.current);
       syncSettingsInterval.current = null;
       syncFeaturesInterval.current = null;
-      console.log("Device sync stopped");
     }
 
     updateStatus("Disconnected", "idle");
@@ -275,28 +286,40 @@ function Home() {
     }
   };
 
-  const sendControl = async (query, type = "Command Send") => {
+  const sendControl = async (query, msg = "Command Send", type, value = null) => {
     const base = serverURL;
     if (!base) return;
     try {
       const response = await fetch(`${base}/control?${query}`);
       if (response.ok) {
-        showToast(type);
+        showToast(msg);
         setTimeout(fetchSettings, 2000);
         setTimeout(fetchFeatures, 2000);
       }
-      console.log(type, query);
+      initializeDeviceSync();
+      // console.log(msg, query);
     } catch (err) {
       console.error("Control failed", err);
       showToast("Command failed", true);
     }
   };
 
+  const handleResolution = () => {
+    const [width, height] = deviceSettings.resolution_str.split("x").map(Number);
+    setStreamData(e => ({
+      ...e,
+      width: width,
+      height: height,
+    }));
+  }
   const handleFlip = () => {
     const newValue = !isFrontCamera;
     setIsFrontCamera(newValue);
     sendControl(`flip=${newValue}`);
   };
+  const handleFlash = () =>{
+    setFlashOn(!isFlashOn)
+  }
   return (
     <>
       <div className="flex h-screen bg-slate-950 text-slate-200">
@@ -434,7 +457,7 @@ function Home() {
             </div>
           </div>
 
-          {showControls && (
+          {!showControls && (
             <div className="space-y-4 pt-2 border-t border-slate-800">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -460,13 +483,22 @@ function Home() {
                   Sync
                 </button>
               </div>
-
-              <button
+              <div className="flex">
+                <button
                 onClick={handleFlip}
-                className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2"
+                className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
               >
                 {isFrontCamera ? "Switch to Back" : "Switch to Front"}
               </button>
+              
+              <button
+                onClick={handleFlash}
+                className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
+              >
+                {isFlashOn ? "Turn off Flash" : "Turn on Flash"}
+              </button>
+              </div>
+              
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
@@ -483,6 +515,8 @@ function Home() {
                     sendControl(
                       `resolution_str=${encodeURIComponent(e.target.value)}`,
                       `Resolution: ${e.target.value}`,
+                      "resolution",
+                      `${e.target.value}`
                     )
                   }
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-brand-500"
@@ -507,6 +541,7 @@ function Home() {
                       sendControl(
                         `focus_mode=${e.target.value}`,
                         `Focus Mode: ${e.target.value === "0" ? "AUTO" : "MANUAL"}`,
+                        "focusMode"
                       );
                       console.log(focusMode);
                     }}
@@ -551,12 +586,14 @@ function Home() {
                         sendControl(
                           `focus_mode=2&focus_distance=${e.target.value}`,
                           `Focus Distance: ${e.target.value}`,
+                          "focusDistance"
                         )
                       }
                       onTouchEnd={(e) =>
                         sendControl(
                           `focus_mode=2&focus_distance=${e.target.value}`,
                           `Focus Distance: ${e.target.value}`,
+                          "focusDistance"
                         )
                       }
                       className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500"
@@ -594,10 +631,15 @@ function Home() {
                     sendControl(
                       `exposure_index=${e.target.value}`,
                       `Exposure: ${e.target.value}`,
+                      "exposure"
                     )
                   }
                   onTouchEnd={(e) =>
-                    sendControl(`exposure_index=${e.target.value}`)
+                    sendControl(
+                      `exposure_index=${e.target.value}`,
+                      `Exposure: ${e.target.value}`,
+                      "exposure"
+                    )
                   }
                   className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500 disabled:opacity-30 disabled:cursor-not-allowed"
                 />

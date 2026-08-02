@@ -75,7 +75,7 @@ function App() {
       const store = await load("settings.json", { autoSave: false });
       const value = await store.get("isFirstRun")
       setIsFirstRun(value);
-      console.log("isFirstRun: ", value);
+      // console.log("isFirstRun: ", value);
       if (value || value === undefined || value === null) {
         await store.set("isFirstRun", true);
         await startAutoInstall().then(async () => {
@@ -83,7 +83,7 @@ function App() {
         });
       }
       else {
-        console.log("Not first run");
+        // console.log("Not first run");
       }
 
       await store.save();
