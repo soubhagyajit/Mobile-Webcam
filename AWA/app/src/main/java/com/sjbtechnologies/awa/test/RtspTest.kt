@@ -55,7 +55,7 @@ object RtspPushTest {
         rtspStream = stream
 
         val videoOk = stream.prepareVideo(1280, 720, 16_000_000)
-        val audioOk = stream.prepareAudio(44_100, 128*1024, false)
+        val audioOk = stream.prepareAudio(128*1024, 48_000, false)
         Log.d("AWA", "Push prepareVideo=$videoOk")
 
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -72,7 +72,7 @@ object RtspPushTest {
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
         }
 
-        if (videoOk) {
+        if (videoOk && audioOk) {
             stream.startStream(rtspUrl)
             Log.d("AWA", "Push started to $rtspUrl")
         } else {

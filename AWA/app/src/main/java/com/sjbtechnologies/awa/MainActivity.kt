@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
@@ -61,6 +63,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -150,11 +153,14 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
                     }
                 }
         ) {
-            when {
-                showLocalPreview ->{
-                    Preview(camView, modifier = Modifier.fillMaxSize())
-                }
-                else -> {
+                Preview(
+                    camView,
+                    Modifier
+                        .fillMaxSize()
+                        .alpha(if (showLocalPreview) 1f else 0f)
+                )
+
+                if (!showLocalPreview) {
                     val message = when {
                         !isServerRunning -> "Server Stopped"
                         streamMode == CameraViewModel.StreamMode.H264_RTSP && isPreviewActive -> "Client connected — tap to preview"
@@ -162,11 +168,13 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
                         isPreviewActive -> "Client connected — tap to preview"
                         else -> "No client connected. (tap to preview)"
                     }
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier.fillMaxSize().background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(message)
                     }
                 }
-            }
         }
         //Top Controls
         Row (
@@ -177,7 +185,7 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ){
-            Row (modifier = Modifier, verticalAlignment = Alignment.CenterVertically){
+            Row (modifier = Modifier, verticalAlignment = Alignment.CenterVertically , horizontalArrangement = Arrangement.spacedBy(16.dp)){
                 Box {
                     TextButton(
                         onClick = {
@@ -241,6 +249,24 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
                                 }
                             }
                         }
+                    }
+                }
+                Box {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            Log.d("AWA", "Flash button tapped")
+                            camView.toggleFlash()
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        if (settings.isFlashEnabled){
+                            Icon(Icons.Default.FlashOff, contentDescription = "Flash", Modifier.size(24.dp), tint = Color.White)
+                        }
+                        else{
+                            Icon(Icons.Default.FlashOn, contentDescription = "Flash", Modifier.size(24.dp), tint = Color.White)
+                        }
+
                     }
                 }
             }

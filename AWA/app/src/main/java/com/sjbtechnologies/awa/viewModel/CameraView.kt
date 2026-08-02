@@ -33,10 +33,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
 import com.pedro.common.ConnectChecker
-import com.pedro.encoder.input.sources.video.Camera2Source
-import com.pedro.library.generic.GenericStream
+import com.pedro.library.view.OpenGlView
+import com.pedro.rtspserver.RtspServerCamera2
 import com.sjbtechnologies.awa.server.VideoStreamServer
-import android.view.TextureView
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -49,12 +48,14 @@ class CameraViewModel : ViewModel() {
         MJPEG("MJPEG"),
         H264_RTSP("H.264 (RTSP)")
     }
+
     enum class StreamResolution(val label: String, val size: Size, val aspectRatio: Int) {
         P480("480p", Size(640, 480), AspectRatio.RATIO_4_3),
         P720("720p", Size(1280, 720), AspectRatio.RATIO_16_9),
         P1080("1080p", Size(1920, 1080), AspectRatio.RATIO_16_9),
         P4K("4K", Size(3840, 2160), AspectRatio.RATIO_16_9)
     }
+
     enum class FocusMode { AUTO, MANUAL }
 
     data class CameraSettings(
@@ -64,7 +65,8 @@ class CameraViewModel : ViewModel() {
         val focusDistance: Float = 0f, // 0.0 = infinity, 1.0 = closest
         val exposureIndex: Int = 0,
         val exposureRange: IntRange = 0..0,
-        val jpegQuality: Int = 80
+        val jpegQuality: Int = 80,
+        val isFlashEnabled: Boolean = false
     )
 
     @Volatile
@@ -72,23 +74,21 @@ class CameraViewModel : ViewModel() {
         private set
 
     private var mjpegCamera: androidx.camera.core.Camera? = null
-    private var genericStream: GenericStream? = null
-    private var rtspView: TextureView? = null
-    private var mjpegView: PreviewView? = null
-
-
+    private var rtspCamera: RtspServerCamera2? = null
     private var appContext: Context? = null
     private var lifecycleOwner: LifecycleOwner? = null
+    private var previewView: PreviewView? = null
 
     private val _isPreviewActive = mutableStateOf(false)
     val isPreviewActive: State<Boolean> = _isPreviewActive
+
     private val _isServerRunning = mutableStateOf(true)
     val isServerRunning: State<Boolean> = _isServerRunning
 
     private val _showLocalPreview = mutableStateOf(false)
     val showLocalPreview: State<Boolean> = _showLocalPreview
     private var hidePreviewRunnable: Runnable? = null
-    private val previewPeekDurationMs = 20000L
+    private val previewPeekDurationMs = 50000L
 
     private val _streamMode = mutableStateOf(StreamMode.MJPEG)
     val streamMode: State<StreamMode> = _streamMode
@@ -97,24 +97,14 @@ class CameraViewModel : ViewModel() {
     val settings: State<CameraSettings> = _settings
 
     private val viewerCount = AtomicInteger(0)
-    private val jpegViewerCount = AtomicInteger(0) // tracks /video viewers specifically, so JPEG work can be skipped when nobody's watching it
+    private val jpegViewerCount = AtomicInteger(0)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraExecutor: ExecutorService? = null
-    private val rtspBitrate = 16_000_000 // 16 Mbps default, hardcoded for now
 
-    // GenericStream PUSHES to an external RTSP server rather than acting as its
-    // own server (unlike the old RtspServerCamera2) — this is the address of
-    // that server (mediamtx running on the desktop).
-    // TODO: replace this
-    // manual text entry with automatic discovery once the desktop side is built.
-    private val _rtspPushUrl = mutableStateOf("rtsp://192.168.31.30:8554/awa")
-
-
-    val rtspPushUrl: State<String> = _rtspPushUrl
-    fun setRtspPushUrl(url: String) {
-        _rtspPushUrl.value = url
-    }
+    private var openGlView: OpenGlView? = null
+    private val rtspPort = 8554
+    private val rtspBitrate = 16_000_000 // 16 Mbps default
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -128,6 +118,7 @@ class CameraViewModel : ViewModel() {
                 }
             }
         }
+
         VideoStreamServer.onUserDisconnected = {
             jpegViewerCount.updateAndGet { (it - 1).coerceAtLeast(0) }
             if (viewerCount.updateAndGet { (it - 1).coerceAtLeast(0) } == 0) {
@@ -147,7 +138,7 @@ class CameraViewModel : ViewModel() {
                 exposure_lower = s.exposureRange.first,
                 exposure_upper = s.exposureRange.last,
                 stream_protocol = _streamMode.value,
-                rtsp_port = null // no longer server-mode; phone pushes to a desktop URL now (see rtspPushUrl)
+                rtsp_port = if (_streamMode.value == StreamMode.H264_RTSP) rtspPort else null
             )
         }
 
@@ -157,20 +148,17 @@ class CameraViewModel : ViewModel() {
                 focus_mode = if (s.focusMode == FocusMode.AUTO) 0 else 1,
                 focus_distance = s.focusDistance,
                 exposure_index = s.exposureIndex,
-                zoom = 1.0f, // TODO add zoom later
+                zoom = 1.0f,
                 stream_quality = s.jpegQuality,
                 flip = s.lensFacing == CameraSelector.LENS_FACING_FRONT,
                 resolution_str = "${s.resolution.size.width}x${s.resolution.size.height}"
             )
         }
 
-        // Ktor runs unconditionally, always — it's the control plane (/features,
-        // /settings) plus the /video route, and must be reachable regardless of
-        // which stream mode is selected or whether streaming is currently on.
         VideoStreamServer.start(8080)
     }
 
-    // --- Unified start/stop, used by the shutter button regardless of mode ---
+    // --- Unified start/stop ---
 
     fun toggleServer() {
         if (_isServerRunning.value) {
@@ -182,9 +170,17 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    fun setStreamMode(mode: StreamMode) {
+        if (_streamMode.value == mode) return
+        val wasRunning = _isServerRunning.value
+        if (wasRunning) stopActiveStream()
+        _streamMode.value = mode
+        if (wasRunning) startActiveStream()
+    }
+
     private fun startActiveStream() {
         when (_streamMode.value) {
-            StreamMode.MJPEG -> {/* Nothing to do here */}
+            StreamMode.MJPEG -> { }
             StreamMode.H264_RTSP -> startRtspCamera()
         }
     }
@@ -200,16 +196,9 @@ class CameraViewModel : ViewModel() {
         hideLocalPreview()
     }
 
-    fun setStreamMode(mode: StreamMode) {
-        if (_streamMode.value == mode) return
-        val wasRunning = _isServerRunning.value
-        if (wasRunning) stopActiveStream()
-        _streamMode.value = mode
-        if (wasRunning) startActiveStream()
-    }
+    // --- Touch-driven local preview ---
 
     fun notifyScreenTapped() {
-        Log.d("AWA", "Screen Tapped")
         if (!_isServerRunning.value) return
         _showLocalPreview.value = true
         if (_streamMode.value == StreamMode.MJPEG) {
@@ -230,8 +219,6 @@ class CameraViewModel : ViewModel() {
         _showLocalPreview.value = false
     }
 
-
-    // --- RTSP Streaming with AVC/H.264 video and audio ---
     private fun buildConnectChecker() = object : ConnectChecker {
         override fun onConnectionStarted(url: String) {
             Log.d("AWA", "RTSP: connection started, url=$url")
@@ -243,7 +230,7 @@ class CameraViewModel : ViewModel() {
         override fun onConnectionFailed(reason: String) {
             Log.e("AWA", "RTSP: connection failed - $reason")
         }
-        override fun onNewBitrate(bitrate: Long) {}
+        override fun onNewBitrate(bitrate: Long) { }
         override fun onDisconnect() {
             Log.d("AWA", "RTSP: client disconnected")
             mainHandler.post { _isPreviewActive.value = false }
@@ -259,28 +246,36 @@ class CameraViewModel : ViewModel() {
     fun attachPreviewSurface(context: Context, owner: LifecycleOwner, preview: PreviewView) {
         appContext = context.applicationContext
         lifecycleOwner = owner
-        mjpegView = preview
+        previewView = preview
         if (_streamMode.value == StreamMode.MJPEG) bindCamera()
     }
-    fun attachRtspPreviewSurface(view: TextureView) {
-        rtspView = view
+
+    fun attachRtspPreviewSurface(view: OpenGlView) {
+        Log.d("AWA", "Attach rtsp preview called")
+        openGlView = view
         try {
-            if (genericStream?.isOnPreview == false) {
-                genericStream?.startPreview(view)
-            }
+            rtspCamera?.replaceView(view)
+            rtspCamera?.startPreview()
+            _showLocalPreview.value = true
             startPreviewHideTimer()
         } catch (e: Exception) {
-            Log.e("AWA", "RTSP startPreview failed", e)
+            Log.e("AWA", "RTSP replaceView(view) failed", e)
         }
     }
+
     fun detachRtspPreviewSurface() {
-        rtspView = null
-        try {
-            if (genericStream?.isOnPreview == true) {
-                genericStream?.stopPreview()
+        val ctx = appContext
+        val wasAttached = openGlView != null
+        openGlView = null
+        if (ctx != null && wasAttached) {
+            try {
+                if (rtspCamera?.isOnPreview == true) {
+                    rtspCamera?.stopPreview()
+                }
+                rtspCamera?.replaceView(ctx)
+            } catch (e: Exception) {
+                Log.e("AWA", "RTSP replaceView(context) failed", e)
             }
-        } catch (e: Exception) {
-            Log.e("AWA", "RTSP stopPreview failed", e)
         }
     }
 
@@ -288,32 +283,41 @@ class CameraViewModel : ViewModel() {
         val ctx = appContext ?: return
         val s = _settings.value
 
-        val stream = GenericStream(ctx, buildConnectChecker())
-        genericStream = stream
+        val camera = RtspServerCamera2(ctx, buildConnectChecker(), rtspPort)
+        rtspCamera = camera
 
-        val videoOk = stream.prepareVideo(s.resolution.size.width, s.resolution.size.height, rtspBitrate)
-        val audioOk = stream.prepareAudio(48_000,false,64*1024)
+        val videoOk = camera.prepareVideo(s.resolution.size.width, s.resolution.size.height, 30, rtspBitrate, 0)
+        val audioOk = camera.prepareAudio()
         Log.d("AWA", "RTSP prepareVideo=$videoOk prepareAudio=$audioOk")
 
-        if (videoOk && audioOk) {
-            stream.startStream(_rtspPushUrl.value)
-            Log.d("AWA", "RTSP push started to ${_rtspPushUrl.value}")
+        if (videoOk) {
+            camera.startStream()
+            Log.d("AWA", "RTSP server started on port $rtspPort")
+            openGlView?.let { view ->
+                try {
+                    camera.replaceView(view)
+                    camera.startPreview()
+                } catch (e: Exception) {
+                    Log.e("AWA", "RTSP replaceView during start failed", e)
+                }
+            }
         } else {
-            Log.e("AWA", "RTSP: prepare failed, not starting stream")
-            genericStream = null
+            Log.e("AWA", "RTSP: prepareVideo failed, not starting stream")
+            rtspCamera = null
         }
     }
+
     private fun stopRtspCamera() {
-        genericStream?.stopStream()
-        genericStream = null
-        rtspView = null
+        rtspCamera?.stopStream()
+        rtspCamera = null
         _isPreviewActive.value = false
     }
+
     private fun restartRtspCamera(reason: String) {
-        if (genericStream == null) return
+        if (rtspCamera == null) return
         Log.d("AWA", "Restarting RTSP camera — reason: $reason")
 
-        val viewToReattach = rtspView
+        val viewToReattach = openGlView
         stopRtspCamera()
         startRtspCamera()
 
@@ -322,15 +326,12 @@ class CameraViewModel : ViewModel() {
         }
     }
 
-
-
-
-
     // --- MJPEG (CameraX) pipeline ---
+
     private fun bindCamera() {
         val ctx = appContext ?: return
         val owner = lifecycleOwner ?: return
-        val preview = mjpegView ?: return
+        val preview = previewView ?: return
         val s = _settings.value
 
         val providerFuture = ProcessCameraProvider.getInstance(ctx)
@@ -389,14 +390,18 @@ class CameraViewModel : ViewModel() {
                 .build()
 
             provider.unbindAll()
-            mjpegCamera = provider.bindToLifecycle(owner, cameraSelector, previewUseCase, imageAnalysis)
-            val exposureState = mjpegCamera!!.cameraInfo.exposureState
-            _settings.value = _settings.value.copy(
-                exposureRange = exposureState.exposureCompensationRange.lower..exposureState.exposureCompensationRange.upper,
-                exposureIndex = exposureState.exposureCompensationIndex
-            )
+            val camera = provider.bindToLifecycle(owner, cameraSelector, previewUseCase, imageAnalysis)
+            mjpegCamera = camera
+
+            camera.cameraInfo.exposureState.let { exposureState ->
+                _settings.value = _settings.value.copy(
+                    exposureRange = exposureState.exposureCompensationRange.lower..exposureState.exposureCompensationRange.upper,
+                    exposureIndex = exposureState.exposureCompensationIndex
+                )
+            }
         }, ContextCompat.getMainExecutor(ctx))
     }
+
     private fun unbindCamera() {
         cameraProvider?.unbindAll()
         cameraExecutor?.shutdown()
@@ -404,10 +409,11 @@ class CameraViewModel : ViewModel() {
         cameraProvider = null
         currentFrame = null
         mjpegCamera = null
-        mjpegView = null
+        previewView = null
         lifecycleOwner = null
         VideoStreamServer.latestFrame = null
     }
+
     private fun imageProxyToNv21(image: androidx.camera.core.ImageProxy): ByteArray {
         val width = image.width
         val height = image.height
@@ -442,10 +448,9 @@ class CameraViewModel : ViewModel() {
 
         for (row in 0 until uvHeight) {
             for (col in 0 until uvWidth) {
-                val vIndex = row * uvRowStride + col * uvPixelStride
-                val uIndex = row * uvRowStride + col * uvPixelStride
-                nv21[outputOffset++] = vBuffer.get(vIndex)
-                nv21[outputOffset++] = uBuffer.get(uIndex)
+                val uvIndex = row * uvRowStride + col * uvPixelStride
+                nv21[outputOffset++] = vBuffer.get(uvIndex)
+                nv21[outputOffset++] = uBuffer.get(uvIndex)
             }
         }
 
@@ -453,6 +458,7 @@ class CameraViewModel : ViewModel() {
     }
 
     // --- Focus ---
+
     fun toggleFocusMode() {
         val newMode = if (_settings.value.focusMode == FocusMode.AUTO) FocusMode.MANUAL else FocusMode.AUTO
         _settings.value = _settings.value.copy(focusMode = newMode)
@@ -462,6 +468,7 @@ class CameraViewModel : ViewModel() {
             cancelFocusAndMetering()
         }
     }
+
     fun setFocusDistance(distance: Float) {
         _settings.value = _settings.value.copy(focusDistance = distance)
         if (_settings.value.focusMode == FocusMode.MANUAL) {
@@ -472,18 +479,16 @@ class CameraViewModel : ViewModel() {
     @OptIn(ExperimentalCamera2Interop::class)
     private fun applyManualFocus(dist: Float) {
         val distance = 1f - dist
-        if (_streamMode.value == StreamMode.MJPEG){
+        if (_streamMode.value == StreamMode.MJPEG) {
             val currentCamera = mjpegCamera ?: return
-
             val camera2Info = Camera2CameraInfo.from(currentCamera.cameraInfo)
             val minFocusDistance = camera2Info.getCameraCharacteristic(
                 CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
             ) ?: 0f
 
-            if (minFocusDistance == 0f) return // fixed-focus cameras don't support manual distance
+            if (minFocusDistance == 0f) return
 
             val focusDiopters = distance * minFocusDistance
-
             val camera2Control = Camera2CameraControl.from(currentCamera.cameraControl)
             val options = CaptureRequestOptions.Builder()
                 .setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
@@ -491,10 +496,19 @@ class CameraViewModel : ViewModel() {
                 .build()
 
             camera2Control.setCaptureRequestOptions(options)
-        }
-        else{
-            val test = genericStream?.videoSource is Camera2Source
-            Log.d("AWA", "Manual focus for RTSP not yet verified against GenericStream/Camera2Source API $test")
+        } else {
+            val currentCamera = rtspCamera ?: return
+            val minFocusDistance = currentCamera.cameraCharacteristics.get(
+                CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
+            ) ?: 0f
+
+            if (minFocusDistance == 0f) return
+
+            if (currentCamera.isAutoFocusEnabled) {
+                currentCamera.disableAutoFocus()
+            }
+            Log.d("AWA", "AutoFocus state: ${currentCamera.isAutoFocusEnabled}")
+            currentCamera.setFocusDistance(distance * minFocusDistance)
         }
     }
 
@@ -505,11 +519,12 @@ class CameraViewModel : ViewModel() {
             val camera2Control = Camera2CameraControl.from(currentCamera.cameraControl)
             camera2Control.clearCaptureRequestOptions()
             currentCamera.cameraControl.cancelFocusAndMetering()
-        }
-        else{
-            // TODO VERIFY: same caveat as applyManualFocus — Camera2Source's
-            // equivalent to enableAutoFocus() isn't confirmed yet.
-            Log.d("AWA", "Auto focus re-enable for RTSP not yet verified against GenericStream/Camera2Source API")
+        } else {
+            var focus = rtspCamera?.isAutoFocusEnabled
+            Log.d("AWA", "RTSP cancel manual , Autofocus : $focus")
+            rtspCamera?.enableAutoFocus()
+            focus = rtspCamera?.isAutoFocusEnabled
+            Log.d("AWA", "RTSP cancel manual , Autofocus : $focus")
         }
     }
 
@@ -525,11 +540,12 @@ class CameraViewModel : ViewModel() {
 
         cameraControl.startFocusAndMetering(action)
     }
+
     fun tapToFocus(view: View, event: MotionEvent) {
         _settings.value = _settings.value.copy(focusMode = FocusMode.AUTO)
-
-
+        rtspCamera?.tapToFocus(view, event)
     }
+
     fun flipCamera() {
         val newFacing = if (_settings.value.lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
@@ -539,9 +555,44 @@ class CameraViewModel : ViewModel() {
             StreamMode.MJPEG -> bindCamera()
             StreamMode.H264_RTSP -> {
                 try {
-                    (genericStream?.videoSource as? Camera2Source)?.switchCamera()
+                    rtspCamera?.switchCamera()
                 } catch (e: Exception) {
                     Log.e("AWA", "RTSP switchCamera failed", e)
+                }
+            }
+        }
+    }
+
+    fun toggleFlash() {
+        val targetState = !_settings.value.isFlashEnabled
+        _settings.value = _settings.value.copy(isFlashEnabled = targetState)
+        applyFlash(targetState)
+    }
+
+    fun applyFlash(enable: Boolean) {
+        when (_streamMode.value) {
+            StreamMode.MJPEG -> {
+                mjpegCamera?.let { camera ->
+                    if (camera.cameraInfo.hasFlashUnit()) {
+                        camera.cameraControl.enableTorch(enable)
+                    } else {
+                        Log.w("AWA", "MJPEG: Device has no flash unit")
+                    }
+                }
+            }
+
+            StreamMode.H264_RTSP -> {
+                rtspCamera?.let { camera ->
+                    try {
+                        if (enable) {
+                            camera.enableLantern()
+                        } else {
+                            camera.disableLantern()
+                        }
+                        Log.d("AWA", "RTSP Lantern active: ${camera.isLanternEnabled}")
+                    } catch (e: Exception) {
+                        Log.e("AWA", "Failed to toggle RTSP lantern", e)
+                    }
                 }
             }
         }
@@ -562,7 +613,12 @@ class CameraViewModel : ViewModel() {
     }
 
     fun setExposure(index: Int) {
-        mjpegCamera?.cameraControl?.setExposureCompensationIndex(index)
+        if (_streamMode.value == StreamMode.MJPEG){
+            mjpegCamera?.cameraControl?.setExposureCompensationIndex(index)
+        }
+        else{
+            rtspCamera?.exposure = index
+        }
         _settings.value = _settings.value.copy(exposureIndex = index)
     }
 
