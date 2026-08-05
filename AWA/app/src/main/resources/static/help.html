@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en" style='margin:0;padding:0;background-color: #000000; color: white;'>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Android Streamer API Docs</title>
+    <style>
+    pre {
+        background-color: #222222;
+        color: #f8f8f2;
+        padding: 12px;
+        border-radius: 8px;
+        overflow-x: auto;
+        white-space: pre-wrap; /* Optional: wrap long lines */
+        font-family: Consolas, "Courier New", monospace;
+    }
+
+    pre code {
+        background: none;
+        padding: 0;
+        border-radius: 0;
+        color: inherit;
+    }
+
+    code {
+        background-color: #222222;
+        color: #f8f8f2;
+        padding: 2px 5px;
+        border-radius: 5px;
+        font-family: Consolas, "Courier New", monospace;
+    }
+    </style>
+</head>
+<body>
+<h1>Android Webcam App</h1>
+<p>Available endpoints :</p>
+<div class="card">
+    <h3>
+        <span class="method get">GET</span> '<code>/video</code>'
+    </h3>
+    <p>MJPEG stream.</p>
+</div>
+
+<div class="card">
+    <h3>
+        <span class="method get">GET</span> <code>/features</code>
+    </h3>
+    <p>Get available features. e.g.</p>
+    <pre><code>
+{
+    "resolutions": ["640x480","1280x720","1920x1080","3840x2160"],
+    "manual_focus": true,
+    "exposure_lower": -20,
+    "exposure_upper": 20,
+    "stream_protocol": "MJPEG"
+}</code>
+    </pre>
+</div>
+
+<div class="card">
+    <h3><span class="method get">Get</span> <code>/settings</code></h3>
+    <p>Get current settings. e.g.</p>
+    <pre><code>
+{
+    "focus_mode": 0,
+    "focus_distance": 0.0,
+    "exposure_index": 0,
+    "zoom": 1.0,
+    "stream_quality": 80,
+    "flip": false,
+    "resolution_str": "1280x720"
+    "camera": "back",
+}</code>
+    </pre>
+</div>
+<div class="card">
+    <h3><span class="method get">Get</span> <code>/control</code></h3>
+    <p>Get current settings. e.g.</p>
+    <pre><code>
+{
+    "focus_mode": 0,
+    "focus_distance": 0.0,
+    "exposure_index": 0,
+    "zoom": 1.0,
+    "stream_quality": 80,
+    "flip": false,
+    "resolution_str": "1280x720"
+    "camera": "back",
+}</code>
+    </pre>
+</div><div class="card">
+    <h3><span class="method post">POST</span> <code>/settings</code></h3>
+    <p>Set settings endpoint. Post a JSON object with the desired settings to update multiple states at once. e.g. </p>
+    <pre><code>
+{
+    "focus_mode": 0,
+    "focus_distance": 0.0,
+    "exposure_index": 0,
+    "zoom": 1.0,
+    "stream_quality": 80,
+    "flip": false,
+    "resolution_str": "1280x720"
+    "camera": "back",
+}</code>
+    </pre>
+</div>
+</div><div class="card">
+    <h3>Note:</h3>
+    <p>Zoom is not supported yet. For more details check out : <a href="https://github.com/soubhagyajit/Android-Webcam-Project">Github Project</a></p>
+    <pre><code>
+{
+    "focus_mode": 0,
+    "focus_distance": 0.0,
+    "exposure_index": 0,
+    "zoom": 1.0,
+    "stream_quality": 80,
+    "flip": false,
+    "resolution_str": "1280x720"
+    "camera": "back",
+}</code>
+    </pre>
+</div>
+</body>
+</html>
