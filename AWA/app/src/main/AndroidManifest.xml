@@ -23,6 +23,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:screenOrientation="landscape"
             android:theme="@style/Theme.AWA">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -30,6 +31,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".HelpActivity"
+            android:exported="false"
+            android:label="API Help"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.AWA" />
     </application>
 
 </manifest>

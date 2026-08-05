@@ -1,6 +1,7 @@
 package com.sjbtechnologies.awa
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -302,7 +304,6 @@ private fun CameraContent(camView: CameraViewModel) {
                     Icon(Icons.Default.Link, contentDescription = "Server Status", tint = Color.Green,modifier = Modifier.padding(horizontal = 2.dp))
                 else
                     Icon(Icons.Default.Link, contentDescription = "Server Status", tint = Color.Red,modifier = Modifier.padding(horizontal = 2.dp))
-
             }
         }
 
@@ -434,6 +435,21 @@ fun SettingsPanel(
                             }
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    val context = LocalContext.current
+                    TextButton(
+                        onClick = {
+                            val intent = Intent(context, HelpActivity::class.java)
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("API Help & Info")
                     }
                 }
             }

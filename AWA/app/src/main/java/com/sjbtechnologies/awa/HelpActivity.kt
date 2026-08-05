@@ -1,7 +1,7 @@
 package com.sjbtechnologies.awa
 
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -22,11 +22,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import com.sjbtechnologies.awa.ui.theme.AWATheme
 
 class HelpActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         enableEdgeToEdge()
         setContent {
             AWATheme {
@@ -36,7 +39,7 @@ class HelpActivity : ComponentActivity() {
                             title = { Text("API Documentation") },
                             navigationIcon = {
                                 IconButton(onClick = { finish() }) {
-                                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                                 }
                             }
                         )
@@ -169,10 +172,44 @@ fun HelpContent(modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                     TextButton(onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/soubhagyajit/Android-Webcam-Project"))
+                        val intent = Intent(Intent.ACTION_VIEW, "https://github.com/soubhagyajit/Android-Webcam-Project".toUri())
                         context.startActivity(intent)
                     }) {
                         Text("Github Project")
+                    }
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    
+                    Text(text = "License:", fontWeight = FontWeight.Bold)
+                    TextButton(onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://github.com/soubhagyajit/Android-Webcam-Project?tab=GPL-3.0-1-ov-file".toUri())
+                        context.startActivity(intent)
+                    }) {
+                        Text("GNU General Public License v3.0")
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    Text(text = "Acknowledgments:", fontWeight = FontWeight.Bold)
+                    
+                    Text(
+                        text = "Special thanks to these amazing projects:",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    TextButton(onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://github.com/tshino/softcam".toUri())
+                        context.startActivity(intent)
+                    }) {
+                        Text("softcam driver by tshino")
+                    }
+
+                    TextButton(onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://github.com/pedroSG94".toUri())
+                        context.startActivity(intent)
+                    }) {
+                        Text("Rootencoder & RTSP-Server by pedroSG94")
                     }
                 }
             }

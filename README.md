@@ -4,7 +4,7 @@ Turn your Android phone into a high-quality webcam using a fully local, serverle
 
 Open-source (GPL-3.0)
 
-## ✨ What's Included
+## What's Included
 
 This is a **complete professional solution** with:
 
@@ -12,25 +12,26 @@ This is a **complete professional solution** with:
 - 💻 **Tauri Desktop Client** (Windows/Mac/Linux)
 - 🔌 **USB Connection Support** (low latency, more stable)
 - 📡 **WiFi Connection Support** (wireless freedom)
-## 🧩 Components
+## Components
 
-### 💻 AWC — Desktop Client
+### AWC — Desktop Client
 Tauri-based app that connects to your phone and outputs virtual webcam.
 
-### 📱 AWA — Android App
+### AWA — Android App
 Kotlin-based mobile app that acts as the streaming server.
-## 🚀 Features
+## Features
 
 ### Mobile App
 - HD/FHD/4K resolution support (480p, 720p, 1080p, 4K)
-- Adjustable FPS (15, 30, 60 fps) *(Planned)*
 - Front/back camera switching
 - USB and WiFi connection modes
 - Real-time connection status
 - Low battery usage
+#### *(Planned)*
+- Adjustable FPS (15, 30, 60 fps) 
 
 ### Desktop Client
-- Virtual webcam device (works with Zoom, Teams, Meet, OBS, etc.) ***
+- Virtual webcam device (works with Zoom, Teams, Meet, OBS, etc.)
 - Clean, modern UI
 - Connection statistics
 
@@ -38,11 +39,11 @@ Kotlin-based mobile app that acts as the streaming server.
 - **USB Mode**: Lower latency, more stable, no WiFi needed
 - **WiFi Mode**: Wireless freedom, works anywhere
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Required
 - **PC**: Windows 10+, (*Planned for* macOS and Linux)
-- **Phone**: Android 7.0+
+- **Phone**: Android 8.0+
 
 ### For Development
 - **Android Studio** (for Android builds)
@@ -50,7 +51,7 @@ Kotlin-based mobile app that acts as the streaming server.
 - Or your favourite software for developement
 
 
-## 🎥 Using as Virtual Webcam ***
+## Using as Virtual Webcam
 
 The desktop client creates a virtual webcam that works with:
 
@@ -74,17 +75,17 @@ May require `v4l2loopback` kernel module:
 sudo apt-get install v4l2loopback-dkms
 ``` -->
 
-## 🔧 Configuration
+## Configuration
 
 ### Change Resolution
 Edit in mobile app settings or in code:
 - 480p (640x480) - Low bandwidth
-- 720p (1280x720) - **Recommended**
+- 720p (1280x720) - **Recommended for older phones**
 - 1080p (1920x1080) - High quality
 - 4K (3840x2160) - Maximum quality
 
 
-## 🏗️ Building for Production
+## Building for Production
 
 ### Desktop Apps
 ```bash
@@ -95,12 +96,12 @@ npm run build:win
 
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Connection Issues
 
 **"Can't connect -"**
-- Check firewall (allow port 8080)
+- Check firewall (allow port 8080 and 8554 - default ports)
 - Verify same WiFi network (for WiFi mode)
 - Check USB debugging (for USB mode)
 
@@ -112,7 +113,7 @@ npm run build:win
 - Close other apps using camera
 - Use 5GHz WiFi if available
 
-## 🌟 Advantages Over Other APPs
+## Advantages Over Other APPs
 
 | Feature | AWA | Other APPs  |
 |---------|--------------|----------|
@@ -125,7 +126,7 @@ npm run build:win
 | Privacy | ✅ Self-hosted | ⚠️ |
 | No Ads | ✅ Yes | ❌ Has ads |
 
-## 🤝 Contributing
+## Contributing
 
 This is an open-source project! Contributions welcome:
 
@@ -135,7 +136,7 @@ This is an open-source project! Contributions welcome:
 - 📖 Improve documentation
 - ⭐ Star the repository
 
-## 📄 License
+## License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
@@ -151,32 +152,27 @@ This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**
 See the [LICENSE](LICENSE) file for full details.
 
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Virtual camera powered by [Softcam](https://github.com/tshino/softcam) © tshino (MIT License)
 - Built with Kotlin, Electron.
 - Inspired by DroidCam and similar tools.
 - Made with ❤️ for the open-source community.
 
-## 🚀 Roadmap
+## Roadmap
 
 - [ ] Audio streaming support
-- [ ] Multiple phone support at a time
 - [ ] Recording functionality
-- [ ] Native virtual camera driver
-- [ ] Cloud signaling option
 - [ ] Mobile app on app stores
 
-## 💬 Support
+## Support
 
 Having issues? Found a bug?
 
-1. Check the documentation files
-2. Search existing issues on GitHub
-3. Create a new issue with details
-4. Join our community discussions
+1. Create a new issue with details
+2. Join our community discussions
 
-## ⭐ Show Your Support
+## Show Your Support
 
 If you find this useful:
 - ⭐ Star the repository
@@ -185,6 +181,8 @@ If you find this useful:
 - 🤝 Contribute improvements
 
 ---
+
+#### *** *Virtual Webcam Device is back. Enjoy AWP - Android Webcam Project!*
 
 #### *** *Virtual webcam device is not included in client version v1.0.5 as I am investing an issue. I will soon release next version with Virtual camera included. If you need the Virtual camera, please install client version v1.0.4*
 
