@@ -2,6 +2,7 @@
 mod installer;
 mod adb;
 mod vc;
+mod sender;
 // #[tauri::command]
 // fn greet(name: &str) -> String {
 //     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -13,7 +14,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![installer::init_installer, adb::adb_get_devices, adb::adb_connect_device, vc::init_cam])
+        .invoke_handler(tauri::generate_handler![
+            installer::init_installer, 
+            adb::adb_get_devices, 
+            adb::adb_connect_device, 
+            vc::init_cam, 
+            sender::set_hw_decode_enabled, 
+            sender::start_sender, 
+            sender::stop_sender])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

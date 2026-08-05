@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import Preview from "../components/preview";
 
 function Home() {
   //app-version
@@ -47,8 +48,8 @@ function Home() {
     exposure_index: 1,
     zoom: 1.0,
     stream_quality: 100,
-    flip: false,
     resolution_str: "1280x720",
+    camera: "back",
   });
 
   const [virtualCamActive, setVirtualCamActive] = useState(false);
@@ -56,7 +57,7 @@ function Home() {
 
   const [showControls, setShowControls] = useState(false);
   const [resolutions, setResolutions] = useState([]);
-  const [isFrontCamera, setIsFrontCamera] = useState(false);
+  const [camera, setCamera] = useState("back");
   const [isFlashOn, setFlashOn] = useState(false);
   const [manualFocus, setManualFocus] = useState(false);
   const [focusMode, setFocusMode] = useState("0");
@@ -71,6 +72,11 @@ function Home() {
   const videoRef = useRef(null);
   const syncSettingsInterval = useRef(null);
   const syncFeaturesInterval = useRef(null);
+  const debounceRef = useRef(null);
+
+  // Tracking interaction state via refs to avoid stale closures in setInterval
+  const isDraggingFocus = useRef(false);
+  const isDraggingExposure = useRef(false);
 
   const toastDiv = document.getElementById("toast");
 
@@ -85,7 +91,7 @@ function Home() {
     const urlInput = document.getElementById("serverURL");
     if (mode === "usb") {
       urlInput.classList.replace("flex", "hidden");
-      setServerIP("localhost");
+      setServerIP("127.0.0.1");
       setServerPort("8080");
       handleGetDevices();
     } else if (mode === "wifi") {
@@ -101,17 +107,20 @@ function Home() {
 
   useEffect(() => {
     if (!isConnected) return;
-    // console.log(deviceFeatures);
-    // console.log(deviceSettings);
-    // console.log(focusMode);
-    setManualFocusValue(deviceSettings.focus_distance);
+    
+    // Only update local UI state if the user is not actively dragging the sliders
+    if (!isDraggingFocus.current) {
+      setManualFocusValue(deviceSettings.focus_distance);
+    }
+    if (!isDraggingExposure.current) {
+      setExposure((e) => ({ ...e, value: deviceSettings.exposure_index }));
+    }
     setFocusMode(deviceSettings.focus_mode.toString());
-    setExposure((e) => ({ ...e, value: deviceSettings.exposure_index }));
-  }, [deviceSettings, deviceFeatures]);
+  }, [deviceSettings, deviceFeatures, isConnected]);
 
   useEffect(()=>{
     handleResolution();
-  },[deviceSettings.resolution_str])
+  },[deviceSettings.resolution_str]);
 
   useEffect(() => {
   const applyResolutionChange = async () => {
@@ -122,7 +131,7 @@ function Home() {
     };
     applyResolutionChange();
   }, [streamData.width, streamData.height]);
-
+  
   const handleGetDevices = async () => {
     setDevicesLoading(true);
     let devices = await invoke("adb_get_devices");
@@ -169,51 +178,66 @@ function Home() {
     }
   };
 
-  const handleConnect = () => {
-    const url = serverURL; 
-    if (!url) return showToast("Enter a URL first", true);
-    if (url) showToast("Entered URL: " + url, true);
-
-    updateStatus("Connecting...", "idle");
+  const handleConnect = async () => {
     setConnectButtonDisable(true);
-    const video = videoRef.current;
-    video.src = serverURL + "/video" + "?t=" + Date.now();
-
     setConnectButtonText("Connecting...");
-    //   toggleConnectBtn.disabled = true;
+    updateStatus("Querying device features...", "idle");
 
-    video.onload = async () => {
+    try {
+      // 1. Fetch feature flags from phone server
+      const response = await fetch(`http://${serverIP}:${serverPort}/features`);
+      const features = await response.json();
+
+      let source = "mjpeg";
+      let targetUrl = `http://${serverIP}:${serverPort}/video`;
+
+      // 2. Check stream protocol
+      const isRtsp = features.stream_protocol && features.stream_protocol.includes("RTSP");
+
+      if (isRtsp) {
+        source = "rtsp";
+        const rtspPort = features.rtsp_port || 8554;
+        // Clean root URL without explicit subpath
+        targetUrl = `rtsp://${serverIP}:${rtspPort}`;
+      }
+
+      updateStatus(`Starting ${source.toUpperCase()} stream...`, "idle");
+
+      // 3. Start Rust middleman sender
+      await invoke("start_sender", {
+        source: source,
+        url: targetUrl,
+      });
+
       setIsConnected(true);
-
       setShowControls(true);
-
       setConnectButtonDisable(false);
       setConnectButtonText("Disconnect");
-
       setModeIndicator("streaming");
-      updateStatus("Feed Live", "active");
-      await initializeDeviceSync();
-    };
+      updateStatus(`Feed Live (${source.toUpperCase()})`, "active");
 
-    video.onerror = () => {
+      if (features.resolutions) {
+        setResolutions(features.resolutions);
+      }
+
+      // 4. Start background settings/features sync interval
+      await initializeDeviceSync();
+
+    } catch (err) {
+      console.error("Failed to fetch features or connect:", err);
       updateStatus("Connection failed", "error");
       handleDisconnect();
-    };
+    }
   };
 
-  const handleDisconnect = () => {
-    setIsConnected(false);
-    const video = videoRef.current;
-    video.src = "";
+  const handleDisconnect = async () => {
     setIsConnected(false);
     setConnectButtonDisable(false);
     setConnectButtonText("Connect");
     setShowControls(false);
-    // popoutBtn.disabled = true;
-    // virtualCamBtn.disabled = true;
-    // serverUrlInput.disabled = false;
 
-    // cameraControls.classList.add('hidden');
+    // Tell sender.rs to stop
+    await invoke("stop_sender");
 
     if (syncSettingsInterval.current || syncFeaturesInterval.current) {
       clearInterval(syncSettingsInterval.current);
@@ -223,19 +247,17 @@ function Home() {
     }
 
     updateStatus("Disconnected", "idle");
-    // modeIndicator.textContent = 'Standby';
-    // modeIndicator.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 uppercase';
-    // updateStatus('Disconnected', 'idle');
-
-    // if (virtualCamActive) ipcRenderer.send('stop-virtual-camera');
-    // ipcRenderer.send('close-feed-window');
   };
-
   const initializeDeviceSync = async () => {
     await fetchFeatures();
     await fetchSettings();
-    if (syncInterval != 0) {
-      syncSettingsInterval.current = setInterval(fetchSettings, syncInterval);
+    if (syncInterval !== 0 && !syncSettingsInterval.current) {
+      syncSettingsInterval.current = setInterval(() => {
+        // Pause fetching settings while the user is actively using the sliders
+        if (!isDraggingFocus.current && !isDraggingExposure.current) {
+          fetchSettings();
+        }
+      }, syncInterval);
       syncFeaturesInterval.current = setInterval(fetchFeatures, syncInterval);
     }
   };
@@ -251,7 +273,6 @@ function Home() {
       const features = await response.json();
       setDeviceFeatures(features);
       setResolutions(features.resolutions);
-      setIsFrontCamera(features.camera === "front");
       setManualFocus(features.manual_focus);
       if (
         features.exposure_lower !== undefined &&
@@ -280,7 +301,7 @@ function Home() {
 
       const settings = await response.json();
       setDeviceSettings(settings);
-      // console.log(settings)
+      setCamera(settings.camera);
     } catch (err) {
       console.error("Failed to fetch settings:", err);
     }
@@ -293,18 +314,38 @@ function Home() {
       const response = await fetch(`${base}/control?${query}`);
       if (response.ok) {
         showToast(msg);
-        setTimeout(fetchSettings, 2000);
-        setTimeout(fetchFeatures, 2000);
       }
-      initializeDeviceSync();
-      // console.log(msg, query);
+      // Removed initializeDeviceSync() call here to prevent duplicate interval execution
     } catch (err) {
       console.error("Control failed", err);
       showToast("Command failed", true);
     }
   };
 
+  const sendControlDebounced = (query, msg) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      sendControl(query, msg);
+    }, 100);
+  };
+
+  const handleFocusChange = (e) => {
+    const val = e.target.value;
+    setManualFocusValue(val);
+    sendControlDebounced(
+      `focus_mode=1&focus_distance=${val}`,
+      `Focus Distance: ${val}`
+    );
+  };
+
+  const handleExposureChange = (e) => {
+    const val = e.target.value;
+    setExposure((prev) => ({ ...prev, value: val }));
+    sendControlDebounced(`exposure_index=${val}`, `Exposure: ${val}`);
+  };
+
   const handleResolution = () => {
+    if (!deviceSettings.resolution_str) return;
     const [width, height] = deviceSettings.resolution_str.split("x").map(Number);
     setStreamData(e => ({
       ...e,
@@ -312,14 +353,18 @@ function Home() {
       height: height,
     }));
   }
-  const handleFlip = () => {
-    const newValue = !isFrontCamera;
-    setIsFrontCamera(newValue);
-    sendControl(`flip=${newValue}`);
+
+  const handleSwitchCamera = () => {
+    const newValue = camera === "back" ? true : false;
+    setCamera(newValue? "front":"back");
+    sendControl(`camera=${newValue?"front":"back"}`, `Camera: ${newValue? "Front":"Back"}`, "camera", newValue);
   };
+
   const handleFlash = () =>{
     setFlashOn(!isFlashOn)
+    sendControl(`flash=${!isFlashOn}`);
   }
+
   return (
     <>
       <div className="flex h-screen bg-slate-950 text-slate-200">
@@ -378,18 +423,6 @@ function Home() {
                       ) : (
                         <option value="">No devices available</option>
                       )}
-                      {/* // {devices.length > 0 ? (
-                    //   <>
-                    //   <option value="">Select a device</option>
-                    //   {devices.map((device) => (
-                        //       <option key={device.id} value={device.id}>
-                        //         </>
-                        //       {device.model}
-                        //     </option>
-                        //    ))
-                        //   }) : (
-                            //   <option value="">No devices available</option>
-                            // )} */}
                     </select>
                     <button
                       onClick={() => {setDevices([]);handleGetDevices()}}
@@ -457,7 +490,7 @@ function Home() {
             </div>
           </div>
 
-          {!showControls && (
+          {showControls && (
             <div className="space-y-4 pt-2 border-t border-slate-800">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -465,7 +498,7 @@ function Home() {
                 </label>
                 <button
                   onClick={fetchSettings}
-                  className="text-xs text-brand-400 hover:text-brand-300 transition-colors flex items-center gap-1"
+                  className="text-xs text-brand-400 hover:text-brand-300 transition-colors flex items-center gap-1 cursor-pointer"
                 >
                   <svg
                     className="w-3 h-3"
@@ -485,10 +518,10 @@ function Home() {
               </div>
               <div className="flex">
                 <button
-                onClick={handleFlip}
+                onClick={handleSwitchCamera}
                 className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
               >
-                {isFrontCamera ? "Switch to Back" : "Switch to Front"}
+                {camera === "front" ? "Switch to Back" : "Switch to Front"}
               </button>
               
               <button
@@ -498,7 +531,6 @@ function Home() {
                 {isFlashOn ? "Turn off Flash" : "Turn on Flash"}
               </button>
               </div>
-              
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
@@ -543,7 +575,6 @@ function Home() {
                         `Focus Mode: ${e.target.value === "0" ? "AUTO" : "MANUAL"}`,
                         "focusMode"
                       );
-                      console.log(focusMode);
                     }}
                     className="bg-transparent text-[10px] text-brand-400 font-bold outline-none cursor-pointer"
                   >
@@ -551,7 +582,7 @@ function Home() {
                       AUTO
                     </option>
                     <option
-                      value="2"
+                      value="1"
                       className="bg-slate-900"
                       disabled={!manualFocus}
                     >
@@ -566,7 +597,7 @@ function Home() {
                     ? "Manual focus supported"
                     : "Fixed focus camera"}
                 </p>
-                {focusMode === "2" && (
+                {focusMode === "1" && (
                   <div className="space-y-1">
                     <div className="flex justify-between items-center mb-1">
                       <span className="text-[9px] text-slate-500">
@@ -581,21 +612,11 @@ function Home() {
                       min="0"
                       max="1000"
                       value={manualFocusValue}
-                      onChange={(e) => setManualFocusValue(e.target.value)}
-                      onMouseUp={(e) =>
-                        sendControl(
-                          `focus_mode=2&focus_distance=${e.target.value}`,
-                          `Focus Distance: ${e.target.value}`,
-                          "focusDistance"
-                        )
-                      }
-                      onTouchEnd={(e) =>
-                        sendControl(
-                          `focus_mode=2&focus_distance=${e.target.value}`,
-                          `Focus Distance: ${e.target.value}`,
-                          "focusDistance"
-                        )
-                      }
+                      onChange={handleFocusChange}
+                      onMouseDown={() => { isDraggingFocus.current = true; }}
+                      onMouseUp={() => { isDraggingFocus.current = false; }}
+                      onTouchStart={() => { isDraggingFocus.current = true; }}
+                      onTouchEnd={() => { isDraggingFocus.current = false; }}
                       className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500"
                     />
                     <div className="flex justify-between text-[8px] text-slate-500 uppercase">
@@ -621,26 +642,11 @@ function Home() {
                   max={exposure.max}
                   value={exposure.value}
                   disabled={exposure.disabled}
-                  onChange={(e) =>
-                    setExposure((exposure) => ({
-                      ...exposure,
-                      value: e.target.value,
-                    }))
-                  }
-                  onMouseUp={(e) =>
-                    sendControl(
-                      `exposure_index=${e.target.value}`,
-                      `Exposure: ${e.target.value}`,
-                      "exposure"
-                    )
-                  }
-                  onTouchEnd={(e) =>
-                    sendControl(
-                      `exposure_index=${e.target.value}`,
-                      `Exposure: ${e.target.value}`,
-                      "exposure"
-                    )
-                  }
+                  onChange={handleExposureChange}
+                  onMouseDown={() => { isDraggingExposure.current = true; }}
+                  onMouseUp={() => { isDraggingExposure.current = false; }}
+                  onTouchStart={() => { isDraggingExposure.current = true; }}
+                  onTouchEnd={() => { isDraggingExposure.current = false; }}
                   className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500 disabled:opacity-30 disabled:cursor-not-allowed"
                 />
                 <div className="flex justify-between text-[8px] text-slate-500 uppercase">
@@ -726,12 +732,7 @@ function Home() {
               id="videoStreamDiv"
               className={`${isConnected ? "block" : "hidden"} relative w-full h-full flex items-center justify-center`}
             >
-              <img
-                ref={videoRef}
-                id="videoStream"
-                className="max-w-full max-h-full rounded-2xl border border-slate-700/50 video-glow object-contain transition-all duration-500"
-                alt="Stream"
-              />
+              <Preview isConnected={isConnected} />
             </div>
           </div>
 

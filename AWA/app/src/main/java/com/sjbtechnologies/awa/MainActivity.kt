@@ -1,6 +1,8 @@
 package com.sjbtechnologies.awa
 
+import android.Manifest
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
@@ -68,11 +70,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -104,12 +108,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-@Preview(name = "Idle", showBackground = true, uiMode = Configuration.ORIENTATION_LANDSCAPE)
 @Composable
 fun CameraScreen(camView: CameraViewModel = viewModel()) {
+    // Check for both Camera & Audio permissions needed for streaming
+    val hasPermission by checkPermissions(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.INTERNET
+    )
 
-    val hasPermission = checkPermissions()
+    if (hasPermission) {
+        // Render Camera Preview / Streaming controls here
+        CameraContent(camView)
+    } else {
+        // Fallback UI shown while asking or if user denies permissions
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Camera and Audio permissions are required to stream.")
+        }
+    }
+}
 
+@Composable
+private fun CameraContent(camView: CameraViewModel) {
     val isServerRunning by camView.isServerRunning
     val isPreviewActive by camView.isPreviewActive
     val showLocalPreview by camView.showLocalPreview
@@ -117,7 +140,6 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
     var isSettingsOpen by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     val streamMode by camView.streamMode
     var showExposureSlider by remember { mutableStateOf(false) }
@@ -153,28 +175,28 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
                     }
                 }
         ) {
-                Preview(
-                    camView,
-                    Modifier
-                        .fillMaxSize()
-                        .alpha(if (showLocalPreview) 1f else 0f)
-                )
+            Preview(
+                camView,
+                Modifier
+                    .fillMaxSize()
+                    .alpha(if (showLocalPreview) 1f else 0f)
+            )
 
-                if (!showLocalPreview) {
-                    val message = when {
-                        !isServerRunning -> "Server Stopped"
-                        streamMode == CameraViewModel.StreamMode.H264_RTSP && isPreviewActive -> "Client connected — tap to preview"
-                        streamMode == CameraViewModel.StreamMode.H264_RTSP -> "Waiting for client... (tap to preview)"
-                        isPreviewActive -> "Client connected — tap to preview"
-                        else -> "No client connected. (tap to preview)"
-                    }
-                    Box(
-                        Modifier.fillMaxSize().background(Color.Black),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(message)
-                    }
+            if (!showLocalPreview) {
+                val message = when {
+                    !isServerRunning -> "Server Stopped"
+                    streamMode == CameraViewModel.StreamMode.H264_RTSP && isPreviewActive -> "Client connected — tap to preview"
+                    streamMode == CameraViewModel.StreamMode.H264_RTSP -> "Waiting for client... (tap to preview)"
+                    isPreviewActive -> "Client connected — tap to preview"
+                    else -> "No client connected. (tap to preview)"
                 }
+                Box(
+                    Modifier.fillMaxSize().background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(message)
+                }
+            }
         }
         //Top Controls
         Row (
@@ -272,8 +294,9 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
             }
             Row (verticalAlignment = Alignment.CenterVertically){
                 if (isServerRunning)
+
                     Box (modifier = Modifier, contentAlignment = Alignment.Center){
-                        Text("IP : ${ipAddress}:8080",modifier = Modifier.padding(4.dp))
+                        Text("IP : ${ipAddress}:${ if (streamMode == CameraViewModel.StreamMode.H264_RTSP) 8554 else 8080 }",modifier = Modifier.padding(4.dp))
                     }
                 if (isServerRunning)
                     Icon(Icons.Default.Link, contentDescription = "Server Status", tint = Color.Green,modifier = Modifier.padding(horizontal = 2.dp))
@@ -319,7 +342,7 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
 
             // Right slot
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                IconButton(onClick = { camView.flipCamera() }) {
+                IconButton(onClick = { camView.switchCamera() }) {
                     Icon(Icons.Default.Cameraswitch, contentDescription = "Flip Camera", tint = Color.White)
                 }
             }
@@ -333,6 +356,12 @@ fun CameraScreen(camView: CameraViewModel = viewModel()) {
         modifier = Modifier.fillMaxSize(),
         settings
     )
+}
+
+@Preview(name = "Idle", showBackground = true, uiMode = Configuration.ORIENTATION_LANDSCAPE)
+@Composable
+fun CameraScreenPreview() {
+    CameraScreen()
 }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -506,15 +535,39 @@ fun getLocalIpAddress(): String? {
     return null
 }
 @Composable
-fun checkPermissions(): State<Boolean> {
-    val hasPermission = remember { mutableStateOf(false) }
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> hasPermission.value = granted }
+fun checkPermissions(
+    vararg permissions: String = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO
+    )
+): State<Boolean> {
+    val context = LocalContext.current
+    val isPreview = LocalInspectionMode.current
 
-    LaunchedEffect(Unit) {
-        launcher.launch(android.Manifest.permission.CAMERA)
+    // In Compose Preview, mock granted permissions to avoid preview runtime crashes
+    if (isPreview) {
+        return remember { mutableStateOf(true) }
     }
 
-    return hasPermission
+    fun isAllGranted() = permissions.all { permission ->
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    val hasPermissions = remember(permissions) {
+        mutableStateOf(isAllGranted())
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasPermissions.value = results.values.all { it }
+    }
+
+    LaunchedEffect(permissions) {
+        if (!hasPermissions.value) {
+            launcher.launch(permissions.toList().toTypedArray())
+        }
+    }
+
+    return hasPermissions
 }

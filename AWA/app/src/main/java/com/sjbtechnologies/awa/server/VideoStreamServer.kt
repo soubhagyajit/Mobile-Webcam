@@ -1,48 +1,74 @@
 package com.sjbtechnologies.awa.server
 
+import android.util.Log
 import com.sjbtechnologies.awa.viewModel.CameraViewModel
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.cio.*
+import io.ktor.server.http.content.staticResources
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
+import io.ktor.server.request.receive
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.OutputStream
-import kotlinx.serialization.Serializable
 
 object VideoStreamServer {
 
     @Serializable
     data class FeaturesResponse(
         val resolutions: List<String>,
-        val camera: String,
         val manual_focus: Boolean,
         val exposure_lower: Int,
         val exposure_upper: Int,
+        val has_zoom: Boolean,
+        val zoom_max: Float,
+        val zoom_min: Float,
         val stream_protocol: CameraViewModel.StreamMode,
+        val server_port: Int? = null,
         val rtsp_port: Int? = null
     )
 
     @Serializable
     data class SettingsResponse(
+        val camera: String,
+        val resolution_str: String,
+        val zoom: Float,
         val focus_mode: Int,
         val focus_distance: Float,
         val exposure_index: Int,
-        val zoom: Float,
+        val autofocus: Boolean? = null,
         val stream_quality: Int,
-        val flip: Boolean,
-        val resolution_str: String
+        val flash: Boolean = false,
+        val has_flash_unit: Boolean? = null,
+    )
+
+    @Serializable
+    data class SettingsUpdateRequest(
+        val focus_mode: Int? = null,
+        val focus_distance: Float? = null,
+        val autofocus: Boolean? = null,
+        val exposure_index: Int? = null,
+        val zoom: Float? = null,
+        val flash: Boolean? = null,
+        val resolution_str: String? = null,
+        val switchCamera: Boolean? = null,
+        val camera: String,
+        val stream_quality: Int? = null,
     )
 
     var featuresProvider: (() -> FeaturesResponse)? = null
     var settingsProvider: (() -> SettingsResponse)? = null
+
+    // Returns null on success, or an error message String if rejected
+    var onSettingsUpdated: ((SettingsUpdateRequest) -> String?)? = null
 
     private var server: EmbeddedServer<*, *>? = null
     @Volatile
@@ -50,7 +76,6 @@ object VideoStreamServer {
 
     var onUserConnected: (() -> Unit)? = null
     var onUserDisconnected: (() -> Unit)? = null
-
     var onServerStateChanged: ((Boolean) -> Unit)? = null
 
     val isRunning: Boolean
@@ -101,9 +126,14 @@ object VideoStreamServer {
                 get("/features") {
                     val response = featuresProvider?.invoke() ?: FeaturesResponse(
                         resolutions = listOf("640x480", "1280x720", "1920x1080"),
-                        camera = "N/A", manual_focus = false,
-                        exposure_lower = 0, exposure_upper = 0,
+                        manual_focus = false,
+                        exposure_upper = 0,
+                        exposure_lower = 0,
+                        has_zoom = false,
+                        zoom_max = 1.0f,
+                        zoom_min = 1.0f,
                         stream_protocol = CameraViewModel.StreamMode.MJPEG,
+                        server_port = null,
                         rtsp_port = null
                     )
                     call.respond(response)
@@ -111,11 +141,69 @@ object VideoStreamServer {
 
                 get("/settings") {
                     val response = settingsProvider?.invoke() ?: SettingsResponse(
-                        focus_mode = 0, focus_distance = 0f, exposure_index = 1,
-                        zoom = 1.0f, stream_quality = 80, flip = false, resolution_str = "1280x720"
+                        camera = "back",
+                        resolution_str = "1280x720",
+                        zoom = 1.0f,
+                        flash = false,
+                        exposure_index = 1,
+                        autofocus = true,
+                        focus_mode = 0,
+                        focus_distance = 0f,
+                        has_flash_unit = false,
+                        stream_quality = 80,
                     )
                     call.respond(response)
                 }
+
+                // POST Endpoint
+                post("/settings") {
+                    try {
+                        val request = call.receive<SettingsUpdateRequest>()
+                        val error = onSettingsUpdated?.invoke(request)
+                        if (error != null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to error))
+                        } else {
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "success"))
+                        }
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid payload")))
+                    }
+                }
+
+                // GET Endpoint
+                get("/control") {
+                    val params = call.request.queryParameters
+                    Log.d("AWA", "$params")
+                    val update = SettingsUpdateRequest(
+                        camera = params["camera"] ?: "back",
+                        resolution_str = params["resolution_str"],
+                        zoom = params["zoom"]?.toFloatOrNull(),
+                        flash = params["flash"]?.toBooleanStrictOrNull(),
+                        exposure_index = params["exposure_index"]?.toIntOrNull(),
+                        autofocus = params["autofocus"]?.toBooleanStrictOrNull(),
+                        focus_mode = params["focus_mode"]?.toIntOrNull(),
+                        focus_distance = params["focus_distance"]?.toFloatOrNull(),
+                        switchCamera = if (params.contains("switch_camera")) true else null,
+                        stream_quality = 80,
+                    )
+
+                    val error = onSettingsUpdated?.invoke(update)
+                    if (error != null) {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to error))
+                    } else {
+                        val response = settingsProvider?.invoke() ?: SettingsResponse(
+                            focus_mode = 0, focus_distance = 0f, exposure_index = 1,
+                            zoom = 1.0f, stream_quality = 80, resolution_str = "1280x720",
+                            camera = "back"
+                        )
+                        call.respond(HttpStatusCode.OK, response)
+                    }
+                }
+                staticResources("/static", "static")
+                get("/help"){
+                    call.respondRedirect("/static/help.html")
+                }
+
             }
         }.start(wait = false)
     }
@@ -138,7 +226,7 @@ object VideoStreamServer {
                     break
                 }
             }
-            delay(33) // ~30 FPS frame pacing
+            delay(33)
         }
     }
 

@@ -32,10 +32,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.pedro.common.ConnectChecker
+import com.pedro.library.rtsp.RtspCamera2
 import com.pedro.library.view.OpenGlView
 import com.pedro.rtspserver.RtspServerCamera2
 import com.sjbtechnologies.awa.server.VideoStreamServer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -66,7 +70,9 @@ class CameraViewModel : ViewModel() {
         val exposureIndex: Int = 0,
         val exposureRange: IntRange = 0..0,
         val jpegQuality: Int = 80,
-        val isFlashEnabled: Boolean = false
+        val hasFlashUnit: Boolean = false,
+        val isFlashEnabled: Boolean = false,
+        val zoom: Float = 1.0f,
     )
 
     @Volatile
@@ -104,15 +110,17 @@ class CameraViewModel : ViewModel() {
 
     private var openGlView: OpenGlView? = null
     private val rtspPort = 8554
+    private val rtspUrl = "rtsp://192.168.31.30:8554/awa"
     private val rtspBitrate = 16_000_000 // 16 Mbps default
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
 
+        // 1. Viewer Connection Callbacks
         VideoStreamServer.onUserConnected = {
             jpegViewerCount.incrementAndGet()
             if (viewerCount.incrementAndGet() == 1 && _isServerRunning.value && _streamMode.value == StreamMode.MJPEG) {
-                mainHandler.post {
+                viewModelScope.launch(Dispatchers.Main) {
                     _isPreviewActive.value = true
                     bindCamera()
                 }
@@ -122,44 +130,112 @@ class CameraViewModel : ViewModel() {
         VideoStreamServer.onUserDisconnected = {
             jpegViewerCount.updateAndGet { (it - 1).coerceAtLeast(0) }
             if (viewerCount.updateAndGet { (it - 1).coerceAtLeast(0) } == 0) {
-                mainHandler.post {
+                viewModelScope.launch(Dispatchers.Main) {
                     _isPreviewActive.value = false
                     unbindCamera()
                 }
             }
         }
 
+        // 2. Features Provider
         VideoStreamServer.featuresProvider = {
             val s = _settings.value
+            val currentMode = _streamMode.value
             VideoStreamServer.FeaturesResponse(
                 resolutions = StreamResolution.entries.map { "${it.size.width}x${it.size.height}" },
-                camera = if (s.lensFacing == CameraSelector.LENS_FACING_BACK) "back" else "front",
                 manual_focus = true,
                 exposure_lower = s.exposureRange.first,
                 exposure_upper = s.exposureRange.last,
-                stream_protocol = _streamMode.value,
-                rtsp_port = if (_streamMode.value == StreamMode.H264_RTSP) rtspPort else null
+                stream_protocol = currentMode,
+                server_port = 8080, // TODO - Give users option to modify it
+                zoom_max = 1.0f,
+                zoom_min = 1.0f,
+                has_zoom = false, // TODO - Add zoom support
+                rtsp_port = if (currentMode == StreamMode.H264_RTSP) rtspPort else null
             )
         }
 
+        // 3. Settings Provider
         VideoStreamServer.settingsProvider = {
             val s = _settings.value
             VideoStreamServer.SettingsResponse(
-                focus_mode = if (s.focusMode == FocusMode.AUTO) 0 else 1,
-                focus_distance = s.focusDistance,
+                camera = if (s.lensFacing == CameraSelector.LENS_FACING_BACK) "back" else "front",
+                resolution_str = "${s.resolution.size.width}x${s.resolution.size.height}",
+                zoom = s.zoom,
+                flash = s.isFlashEnabled,
                 exposure_index = s.exposureIndex,
-                zoom = 1.0f,
+                focus_mode = if (s.focusMode == FocusMode.AUTO) 0 else 1,
+                focus_distance = s.focusDistance*1000,
                 stream_quality = s.jpegQuality,
-                flip = s.lensFacing == CameraSelector.LENS_FACING_FRONT,
-                resolution_str = "${s.resolution.size.width}x${s.resolution.size.height}"
+                has_flash_unit = s.hasFlashUnit,
             )
+        }
+
+        // 4. Remote Control Settings Callback
+        VideoStreamServer.onSettingsUpdated = { update ->
+            val isRtspActive = _streamMode.value == StreamMode.H264_RTSP && rtspCamera != null
+
+            if (update.resolution_str != null && isRtspActive) {
+                "Cannot change resolution while RTSP stream is active. Stop the stream first."
+            } else {
+                viewModelScope.launch(Dispatchers.Main) {
+                    update.switchCamera?.let { if (it) switchCamera() }
+
+                    update.autofocus?.let { enable ->
+                        if (enable) {
+                            _settings.value = _settings.value.copy(focusMode = FocusMode.AUTO)
+                            cancelFocusAndMetering()
+                        }
+                    }
+                    update.focus_distance?.let { dist ->
+                        _settings.value = _settings.value.copy(focusMode = FocusMode.MANUAL)
+                        val normalized = (dist.coerceIn(1f, 1000f) - 1f) / 999f
+                        setFocusDistance(normalized)
+                    }
+                    update.focus_mode?.let {mode ->
+                        Log.d("AWA","$mode")
+                        if (mode == 1 ){
+                            _settings.value = _settings.value.copy(focusMode = FocusMode.MANUAL)
+                        }
+                        else if (mode == 0){
+                            _settings.value = _settings.value.copy(focusMode = FocusMode.AUTO)
+                            cancelFocusAndMetering()
+                        }
+                    }
+                    update.exposure_index?.let { setExposure(it) }
+
+                    update.flash?.let { enable ->
+                        if (_streamMode.value == StreamMode.MJPEG && mjpegCamera?.cameraInfo?.hasFlashUnit() == false) {
+                            return@let
+                        }
+                        _settings.value = _settings.value.copy(isFlashEnabled = enable)
+                        applyFlash(enable)
+                    }
+
+                    update.zoom?.let { setZoom(it) }
+
+                    update.resolution_str?.let { resStr ->
+                        StreamResolution.entries.find { "${it.size.width}x${it.size.height}" == resStr }
+                            ?.let { setResolution(it) }
+                    }
+                    update.camera.let { state ->
+                        val requestedFacing = if (state == "back") CameraSelector.LENS_FACING_BACK else CameraSelector.LENS_FACING_FRONT
+                        if (_settings.value.lensFacing != requestedFacing) {
+                            setCameraFacing(back = state == "back")
+                        }
+                    }
+                    update.stream_quality?.let{value ->
+                        _settings.value = _settings.value.copy(jpegQuality = value)
+                    }
+                }
+                null
+            }
         }
 
         VideoStreamServer.start(8080)
     }
 
     // --- Unified start/stop ---
-
     fun toggleServer() {
         if (_isServerRunning.value) {
             stopActiveStream()
@@ -173,9 +249,20 @@ class CameraViewModel : ViewModel() {
     fun setStreamMode(mode: StreamMode) {
         if (_streamMode.value == mode) return
         val wasRunning = _isServerRunning.value
+        val switchingFromMjpeg = _streamMode.value == StreamMode.MJPEG
+
         if (wasRunning) stopActiveStream()
         _streamMode.value = mode
-        if (wasRunning) startActiveStream()
+
+        if (!wasRunning) return
+
+        if (switchingFromMjpeg && mode == StreamMode.H264_RTSP) {
+            // Camera2 device release from CameraX is async — give it
+            // a moment before Camera2 (RootEncoder) tries to open it.
+            mainHandler.postDelayed({ startActiveStream() }, 300L)
+        } else {
+            startActiveStream()
+        }
     }
 
     private fun startActiveStream() {
@@ -286,11 +373,20 @@ class CameraViewModel : ViewModel() {
         val camera = RtspServerCamera2(ctx, buildConnectChecker(), rtspPort)
         rtspCamera = camera
 
-        val videoOk = camera.prepareVideo(s.resolution.size.width, s.resolution.size.height, 30, rtspBitrate, 0)
+        val videoOk = try {
+            camera.prepareVideo(s.resolution.size.width, s.resolution.size.height, 30, rtspBitrate, 0)
+        } catch (e: Exception) {
+            Log.e("AWA", "RTSP prepareVideo threw", e)
+            false
+        }
         val audioOk = camera.prepareAudio()
         Log.d("AWA", "RTSP prepareVideo=$videoOk prepareAudio=$audioOk")
 
         if (videoOk) {
+            val flashAvailable = camera.cameraCharacteristics
+                .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+            _settings.value = _settings.value.copy(hasFlashUnit = flashAvailable)
+
             camera.startStream()
             Log.d("AWA", "RTSP server started on port $rtspPort")
             openGlView?.let { view ->
@@ -392,13 +488,15 @@ class CameraViewModel : ViewModel() {
             provider.unbindAll()
             val camera = provider.bindToLifecycle(owner, cameraSelector, previewUseCase, imageAnalysis)
             mjpegCamera = camera
-
             camera.cameraInfo.exposureState.let { exposureState ->
                 _settings.value = _settings.value.copy(
                     exposureRange = exposureState.exposureCompensationRange.lower..exposureState.exposureCompensationRange.upper,
                     exposureIndex = exposureState.exposureCompensationIndex
                 )
             }
+            _settings.value = _settings.value.copy(
+                hasFlashUnit = camera.cameraInfo.hasFlashUnit()  // add this field to CameraSettings
+            )
         }, ContextCompat.getMainExecutor(ctx))
     }
 
@@ -409,8 +507,6 @@ class CameraViewModel : ViewModel() {
         cameraProvider = null
         currentFrame = null
         mjpegCamera = null
-        previewView = null
-        lifecycleOwner = null
         VideoStreamServer.latestFrame = null
     }
 
@@ -478,6 +574,7 @@ class CameraViewModel : ViewModel() {
 
     @OptIn(ExperimentalCamera2Interop::class)
     private fun applyManualFocus(dist: Float) {
+        Log.d("AWA","$dist")
         val distance = 1f - dist
         if (_streamMode.value == StreamMode.MJPEG) {
             val currentCamera = mjpegCamera ?: return
@@ -521,10 +618,10 @@ class CameraViewModel : ViewModel() {
             currentCamera.cameraControl.cancelFocusAndMetering()
         } else {
             var focus = rtspCamera?.isAutoFocusEnabled
-            Log.d("AWA", "RTSP cancel manual , Autofocus : $focus")
+            Log.d("AWA", "RTSP cancel manual , Autofocus before : $focus")
             rtspCamera?.enableAutoFocus()
             focus = rtspCamera?.isAutoFocusEnabled
-            Log.d("AWA", "RTSP cancel manual , Autofocus : $focus")
+            Log.d("AWA", "RTSP cancel manual , Autofocus after: $focus")
         }
     }
 
@@ -546,11 +643,35 @@ class CameraViewModel : ViewModel() {
         rtspCamera?.tapToFocus(view, event)
     }
 
-    fun flipCamera() {
+    fun switchCamera() {
         val newFacing = if (_settings.value.lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         _settings.value = _settings.value.copy(lensFacing = newFacing)
 
+        when (_streamMode.value) {
+            StreamMode.MJPEG -> bindCamera() // already re-derives hasFlashUnit via its callback
+            StreamMode.H264_RTSP -> {
+                try {
+                    rtspCamera?.switchCamera()
+                    val flashAvailable = rtspCamera?.cameraCharacteristics
+                        ?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+                    _settings.value = _settings.value.copy(hasFlashUnit = flashAvailable)
+                    Log.d("AWA", "RTSP switchCamera successful")
+                } catch (e: Exception) {
+                    Log.e("AWA", "RTSP switchCamera failed", e)
+                }
+            }
+        }
+    }
+
+    fun setCameraFacing(back: Boolean) {
+        val target = if (back) CameraSelector.LENS_FACING_BACK else CameraSelector.LENS_FACING_FRONT
+        if (_settings.value.lensFacing == target) return
+        applyCameraFacing(target)
+    }
+
+    private fun applyCameraFacing(facing: Int) {
+        _settings.value = _settings.value.copy(lensFacing = facing)
         when (_streamMode.value) {
             StreamMode.MJPEG -> bindCamera()
             StreamMode.H264_RTSP -> {
@@ -612,11 +733,14 @@ class CameraViewModel : ViewModel() {
         _settings.value = _settings.value.copy(jpegQuality = quality)
     }
 
+    fun setZoom(zoom: Float) {
+        _settings.value = _settings.value.copy(zoom = zoom)
+    }
+
     fun setExposure(index: Int) {
-        if (_streamMode.value == StreamMode.MJPEG){
+        if (_streamMode.value == StreamMode.MJPEG) {
             mjpegCamera?.cameraControl?.setExposureCompensationIndex(index)
-        }
-        else{
+        } else {
             rtspCamera?.exposure = index
         }
         _settings.value = _settings.value.copy(exposureIndex = index)

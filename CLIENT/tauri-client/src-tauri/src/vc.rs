@@ -1,14 +1,23 @@
 // virtual - cam file
-use std::io::Read;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use zune_jpeg::JpegDecoder;
 
 static CAM_RUNNING: AtomicBool = AtomicBool::new(false);
 static CAM_THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// What sender.rs hands off, depending on which source it read from.
+/// MJPEG frames arrive already-encoded and still need a JPEG decode here.
+/// RTSP frames arrive already-decoded (by ffmpeg) and go straight to softcam.
+pub enum IncomingFrame {
+    Jpeg(Vec<u8>),
+    RawBgr(Vec<u8>),
+}
+
+static LATEST_FRAME: Mutex<Option<IncomingFrame>> = Mutex::new(None);
 
 #[link(name = "softcam")]
 unsafe extern "system" {
@@ -18,55 +27,13 @@ unsafe extern "system" {
     fn scDeleteCamera(camera: *mut c_void) -> bool;
 }
 
-// Finds the first occurrence of `marker` in `buffer`, if any.
-fn find_marker(buffer: &[u8], marker: &[u8]) -> Option<usize> {
-    if buffer.len() < marker.len() {
-        return None;
-    }
-    for i in 0..=(buffer.len() - marker.len()) {
-        if buffer[i..i + marker.len()] == *marker {
-            return Some(i);
-        }
-    }
-    None
+/// Called by sender.rs whenever it has a new frame ready, in whichever
+/// form its source naturally produces. Overwrites rather than queues.
+pub fn push_frame(frame: IncomingFrame) {
+    *LATEST_FRAME.lock().unwrap() = Some(frame);
 }
 
-// Pulls exactly one complete MJPEG frame (JPEG bytes only) out of the stream,
-// consuming the corresponding bytes from `buffer`. Does NOT decode - kept
-// deliberately cheap so this can run in a tight loop that never blocks on CPU work.
-fn read_next_jpeg(
-    reader: &mut impl Read,
-    buffer: &mut Vec<u8>,
-    chunk: &mut [u8],
-) -> Option<Vec<u8>> {
-    const HEADER_MARKER: [u8; 4] = [13, 10, 13, 10]; // \r\n\r\n
-    let header_end = loop {
-        if let Some(pos) = find_marker(buffer, &HEADER_MARKER) {
-            break pos;
-        }
-        let n = reader.read(chunk).ok()?;
-        buffer.extend_from_slice(&chunk[..n]);
-    };
-
-    let header_text = String::from_utf8_lossy(&buffer[0..header_end]);
-    let content_length: usize = header_text
-        .lines()
-        .find_map(|line| line.strip_prefix("Content-Length: "))
-        .and_then(|v| v.parse().ok())?;
-
-    let frame_len = header_end + 4 + content_length;
-    while buffer.len() < frame_len {
-        let n = reader.read(chunk).ok()?;
-        buffer.extend_from_slice(&chunk[..n]);
-    }
-
-    let jpeg = buffer[(header_end + 4)..frame_len].to_vec();
-    buffer.drain(..frame_len);
-    Some(jpeg)
-}
-
-// Decodes JPEG bytes and writes BGR pixels into `out`.
-fn decode_to_bgr(jpeg_bytes: &[u8], width: u32, height: u32, out: &mut [u8]) -> bool {
+fn decode_jpeg_to_bgr(jpeg_bytes: &[u8], width: u32, height: u32, out: &mut [u8]) -> bool {
     let mut decoder = JpegDecoder::new(jpeg_bytes);
     let Ok(pixels) = decoder.decode() else {
         return false;
@@ -98,7 +65,6 @@ pub fn init_cam(on: bool, height: u32, width: u32) {
         CAM_RUNNING.store(true, Ordering::Relaxed);
         let handle = std::thread::spawn(move || {
             start_cam(height, width);
-            // start_cam(480, 640);
         });
         *CAM_THREAD.lock().unwrap() = Some(handle);
     } else {
@@ -115,51 +81,33 @@ fn start_cam(height: u32, width: u32) {
     let cam = unsafe { scCreateCamera(width as i32, height as i32, 30.0) };
     unsafe { scWaitForConnection(cam, 30.0) };
 
-    // shared "latest frame" slot — reader overwrites it continuously,
-    // decoder grabs whatever's newest whenever it's ready. No queueing,
-    // no backlog: this is what fixes the falling-behind problem.
-    let latest_jpeg: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-    let latest_jpeg_reader = Arc::clone(&latest_jpeg);
+    // Allocated once, reused for every frame regardless of which branch
+    // below fills it — this is the "no per-frame alloc" rule from above.
+    let mut bgr_scratch = vec![0u8; (width * height * 3) as usize];
 
-    // Reader thread: ONLY reads bytes + finds frame boundaries. Never decodes,
-    // so it can drain the socket as fast as the network delivers data,
-    // regardless of how long decoding takes elsewhere.
-    println!("Starting VC processes!");
-    thread::spawn(move || {
-        let mut reader = reqwest::blocking::get("http://localhost:8080/video")
-            .expect("failed to connect to stream");
-        println!("Connected to server!");
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut chunk = [0u8; 16384];
-
-        while CAM_RUNNING.load(Ordering::Relaxed) {
-            let Some(jpeg) = read_next_jpeg(&mut reader, &mut buffer, &mut chunk) else {
-                continue;
-            };
-            // overwrite, don't queue -> always keep only the newest frame
-            *latest_jpeg_reader.lock().unwrap() = Some(jpeg);
-        }
-    });
-
-    let mut bgr_frame = vec![0u8; (width * height * 3) as usize];
-
-    // Decoder/sender loop
     while CAM_RUNNING.load(Ordering::Relaxed) {
-        let jpeg = latest_jpeg.lock().unwrap().take();
-        let Some(jpeg) = jpeg else {
+        let frame = LATEST_FRAME.lock().unwrap().take();
+        let Some(frame) = frame else {
             thread::sleep(Duration::from_millis(5));
             continue;
         };
 
-        let decode_start = std::time::Instant::now();
-        if !decode_to_bgr(&jpeg, width, height, &mut bgr_frame) {
-            continue;
+        match frame {
+            IncomingFrame::Jpeg(jpeg_bytes) => {
+                if !decode_jpeg_to_bgr(&jpeg_bytes, width, height, &mut bgr_scratch) {
+                    continue;
+                }
+                unsafe { scSendFrame(cam, bgr_scratch.as_ptr()) };
+            }
+            IncomingFrame::RawBgr(bgr_bytes) => {
+                // Already decoded upstream (ffmpeg) — send as-is.
+                // Guard the size so a mismatched resolution can't read out of bounds.
+                if bgr_bytes.len() != bgr_scratch.len() {
+                    continue;
+                }
+                unsafe { scSendFrame(cam, bgr_bytes.as_ptr()) };
+            }
         }
-        println!("Decode took: {:?}", decode_start.elapsed());
-
-        let send_start = std::time::Instant::now();
-        unsafe { scSendFrame(cam, bgr_frame.as_ptr()) };
-        println!("scSendFrame took: {:?}", send_start.elapsed());
     }
 
     unsafe { scDeleteCamera(cam) };

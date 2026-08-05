@@ -2,14 +2,14 @@
 
 Turn your Android phone into a high-quality webcam using a fully local, serverless architecture.
 
-Open-source (GPL-3.0) • No cloud • No signaling server
+Open-source (GPL-3.0)
 
 ## ✨ What's Included
 
 This is a **complete professional solution** with:
 
 - 📱 **Kotlin Mobile App** (Android for now)
-- 💻 **Electron Desktop Client** (Windows/Mac/Linux)
+- 💻 **Tauri Desktop Client** (Windows/Mac/Linux)
 - 🔌 **USB Connection Support** (low latency, more stable)
 - 📡 **WiFi Connection Support** (wireless freedom)
 ## 🧩 Components
