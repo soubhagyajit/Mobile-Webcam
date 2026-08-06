@@ -172,17 +172,14 @@ Having issues? Found a bug?
 1. Create a new issue with details
 2. Join our community discussions
 
-## Show Your Support
-
-If you find this useful:
-- ⭐ Star the repository
-- 📢 Share with others
-- 💬 Provide feedback
-- 🤝 Contribute improvements
+> [!TIP]
+> **Enjoying Android Webcam Project?** ⭐
+>
+> If this project helped you, please consider leaving a **GitHub Star** and sharing your feedback. Your support helps the project grow and motivates future development!
 
 ---
-
-#### *** *Virtual Webcam Device is back in v1.0.6. Enjoy AWP - Android Webcam Project!*
-*Virtual webcam device was not included in client version v1.0.5 as I was investing an issue. I released it in the next version with Virtual camera included. If you need the Virtual camera, please install client version v1.0.6*
+> [!NOTE]
+>*** *Virtual Webcam Device is back in v1.0.6. Enjoy AWP - Android Webcam Project!*
+>*Virtual webcam device was not included in client version v1.0.5 as I was investing an issue. I released it in the next version with Virtual camera included. If you need the Virtual camera, please install client version v1.0.6*
 
 **Happy streaming! Made with ❤️ and ☕ by developers, for developers.**
