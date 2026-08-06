@@ -38,7 +38,14 @@
     "resources": [
       "softcam.dll",
       "softcam.lib",
-      "adb/*"
+      "adb/*",
+      "avcodec-62.dll",
+      "avdevice-62.dll",
+      "avfilter-11.dll",
+      "avformat-62.dll",
+      "avutil-60.dll",
+      "swresample-6.dll",
+      "swscale-9.dll"
     ],
     "license": "GPL-3.0",
     "licenseFile": "../../../LICENSE"   
