@@ -1,4 +1,7 @@
 #  Android Webcam System
+>[!NOTE]
+> Needed testers for publishing the app to Play Store
+> Contact me here [me@soubhagyajit.com](mailto:me@soubhagyajit.com) and send me an email from the email account that you want to test with, I'll send you the invitation link.
 
 Turn your Android phone into a high-quality webcam using a fully local, serverless architecture.
 
