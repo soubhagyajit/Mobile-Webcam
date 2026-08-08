@@ -3,6 +3,16 @@
 > Needed testers for publishing the app to Play Store
 > Contact me here [me@soubhagyajit.com](mailto:me@soubhagyajit.com) and send me an email from the email account that you want to test with, I'll send you the invitation link.
 
+> [!NOTE]
+> ## Sponsorship Needed
+>
+> Android Webcam Project currently supports Android and Windows.
+> I'd like to expand it to iOS and macOS, but Apple development
+> requires access to macOS hardware.
+>
+> If you'd like to support the project, sponsorships will help
+> fund the hardware needed to develop and test Apple-platform
+> versions.
 Turn your Android phone into a high-quality webcam using a fully local, serverless architecture.
 
 Open-source (GPL-3.0)
