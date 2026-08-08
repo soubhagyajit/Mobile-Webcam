@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.sjbtechnologies.awa"
+    namespace = "com.soubhagyajit.awa"
     compileSdk {
         version = release(37) {
             minorApiLevel = 1
@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.sjbtechnologies.awa"
+        applicationId = "com.soubhagyajit.awa"
         minSdk = 26
         targetSdk = 37
         versionCode = 4

@@ -12,11 +12,12 @@ function Home() {
 
   // connection settings
   const [mode, setMode] = useState("usb");
-  const [serverIP, setServerIP] = useState("localhost");
-  const [serverPort, setServerPort] = useState("8080");
-  const [serverURL, setServerURL] = useState(
-    `http://${serverIP}:${serverPort}`,
-  );
+  const [phoneIP, setPhoneIP] = useState("localhost");
+
+  const [streamProtocol, setStreamProtocol] = useState("mjpeg");
+  const [httpPort, setHttpPort] = useState("8080");
+  const [rtspPort, setRtspPort] = useState("8554");
+  const [serverURL, setServerURL] = useState(`http://${phoneIP}:${httpPort}`);
   const [syncInterval, setSyncInterval] = useState(3000);
 
   // connection states and indicators
@@ -53,7 +54,7 @@ function Home() {
   });
 
   const [virtualCamActive, setVirtualCamActive] = useState(false);
-  const [streamData, setStreamData] = useState({width:720, height:1280});
+  const [streamData, setStreamData] = useState({ width: 720, height: 1280 });
 
   const [showControls, setShowControls] = useState(false);
   const [resolutions, setResolutions] = useState([]);
@@ -91,23 +92,23 @@ function Home() {
     const urlInput = document.getElementById("serverURL");
     if (mode === "usb") {
       urlInput.classList.replace("flex", "hidden");
-      setServerIP("127.0.0.1");
-      setServerPort("8080");
+      setPhoneIP("127.0.0.1");
+      setHttpPort("8080");
       handleGetDevices();
     } else if (mode === "wifi") {
       urlInput.classList.replace("hidden", "flex");
-      setServerIP("192.168.31.12");
-      setServerPort("8080");
+      setPhoneIP("192.168.31.12");
+      setHttpPort("8080");
     }
   }, [mode]);
 
   useEffect(() => {
-    setServerURL(`http://${serverIP}:${serverPort}`);
-  }, [serverIP, serverPort]);
+    setServerURL(`http://${phoneIP}:${httpPort}`);
+  }, [phoneIP, httpPort]);
 
   useEffect(() => {
     if (!isConnected) return;
-    
+
     // Only update local UI state if the user is not actively dragging the sliders
     if (!isDraggingFocus.current) {
       setManualFocusValue(deviceSettings.focus_distance);
@@ -118,20 +119,28 @@ function Home() {
     setFocusMode(deviceSettings.focus_mode.toString());
   }, [deviceSettings, deviceFeatures, isConnected]);
 
-  useEffect(()=>{
+  useEffect(() => {
     handleResolution();
-  },[deviceSettings.resolution_str]);
+  }, [deviceSettings.resolution_str]);
 
   useEffect(() => {
-  const applyResolutionChange = async () => {
+    const applyResolutionChange = async () => {
       if (vc) {
-        await invoke("init_cam", { on: false, height: streamData.height, width: streamData.width });
-        await invoke("init_cam", { on: true, height: streamData.height, width: streamData.width });
+        await invoke("init_cam", {
+          on: false,
+          height: streamData.height,
+          width: streamData.width,
+        });
+        await invoke("init_cam", {
+          on: true,
+          height: streamData.height,
+          width: streamData.width,
+        });
       }
     };
     applyResolutionChange();
   }, [streamData.width, streamData.height]);
-  
+
   const handleGetDevices = async () => {
     setDevicesLoading(true);
     let devices = await invoke("adb_get_devices");
@@ -150,17 +159,24 @@ function Home() {
     setDevicesLoading(false);
   };
 
-  const handleVC = async () =>{
-    let i = vc ;
+  const handleVC = async () => {
+    let i = vc;
     setVc(!i);
-    if (i === false){
-      await invoke("init_cam", {on:!i, height:streamData.height, width:streamData.width });
+    if (i === false) {
+      await invoke("init_cam", {
+        on: !i,
+        height: streamData.height,
+        width: streamData.width,
+      });
+    } else {
+      await invoke("init_cam", {
+        on: !i,
+        height: streamData.height,
+        width: streamData.width,
+      });
     }
-    else{
-      await invoke("init_cam", {on:!i, height:streamData.height, width:streamData.width });
-    }
-  }
-  
+  };
+
   const showToast = (message, isError = false) => {
     setToast({ message, isError, visible: true });
     setTimeout(() => setToast((t) => ({ ...t, visible: false })), 3000);
@@ -184,28 +200,27 @@ function Home() {
     updateStatus("Querying device features...", "idle");
 
     try {
-      // 1. Fetch feature flags from phone server
-      const response = await fetch(`http://${serverIP}:${serverPort}/features`);
+      const response = await fetch(`http://${phoneIP}:${httpPort}/features`);
       const features = await response.json();
 
-      let source = "mjpeg";
-      let targetUrl = `http://${serverIP}:${serverPort}/video`;
-
-      // 2. Check stream protocol
-      const isRtsp = features.stream_protocol && features.stream_protocol.includes("RTSP");
+      setStreamProtocol("mjpeg");
+      let targetUrl = `http://${phoneIP}:${httpPort}/video`;
+      const isRtsp =
+        features.stream_protocol && features.stream_protocol.includes("RTSP");
 
       if (isRtsp) {
-        source = "rtsp";
-        const rtspPort = features.rtsp_port || 8554;
-        // Clean root URL without explicit subpath
-        targetUrl = `rtsp://${serverIP}:${rtspPort}`;
+        setStreamProtocol("rtsp");
+        setRtspPort(features.stream_port || rtspPort);
+        targetUrl = `rtsp://${phoneIP}:${rtspPort}`;
       }
 
-      updateStatus(`Starting ${source.toUpperCase()} stream...`, "idle");
+      updateStatus(
+        `Starting ${streamProtocol.toUpperCase()} stream...`,
+        "idle",
+      );
 
-      // 3. Start Rust middleman sender
       await invoke("start_sender", {
-        source: source,
+        source: streamProtocol,
         url: targetUrl,
       });
 
@@ -214,7 +229,7 @@ function Home() {
       setConnectButtonDisable(false);
       setConnectButtonText("Disconnect");
       setModeIndicator("streaming");
-      updateStatus(`Feed Live (${source.toUpperCase()})`, "active");
+      updateStatus(`Feed Live (${streamProtocol.toUpperCase()})`, "active");
 
       if (features.resolutions) {
         setResolutions(features.resolutions);
@@ -222,7 +237,6 @@ function Home() {
 
       // 4. Start background settings/features sync interval
       await initializeDeviceSync();
-
     } catch (err) {
       console.error("Failed to fetch features or connect:", err);
       updateStatus("Connection failed", "error");
@@ -307,7 +321,12 @@ function Home() {
     }
   };
 
-  const sendControl = async (query, msg = "Command Send", type, value = null) => {
+  const sendControl = async (
+    query,
+    msg = "Command Send",
+    type,
+    value = null,
+  ) => {
     const base = serverURL;
     if (!base) return;
     try {
@@ -334,7 +353,7 @@ function Home() {
     setManualFocusValue(val);
     sendControlDebounced(
       `focus_mode=1&focus_distance=${val}`,
-      `Focus Distance: ${val}`
+      `Focus Distance: ${val}`,
     );
   };
 
@@ -346,25 +365,54 @@ function Home() {
 
   const handleResolution = () => {
     if (!deviceSettings.resolution_str) return;
-    const [width, height] = deviceSettings.resolution_str.split("x").map(Number);
-    setStreamData(e => ({
+    const [width, height] = deviceSettings.resolution_str
+      .split("x")
+      .map(Number);
+    setStreamData((e) => ({
       ...e,
       width: width,
       height: height,
     }));
-  }
+  };
 
   const handleSwitchCamera = () => {
     const newValue = camera === "back" ? true : false;
-    setCamera(newValue? "front":"back");
-    sendControl(`camera=${newValue?"front":"back"}`, `Camera: ${newValue? "Front":"Back"}`, "camera", newValue);
+    setCamera(newValue ? "front" : "back");
+    sendControl(
+      `camera=${newValue ? "front" : "back"}`,
+      `Camera: ${newValue ? "Front" : "Back"}`,
+      "camera",
+      newValue,
+    );
   };
 
-  const handleFlash = () =>{
-    setFlashOn(!isFlashOn)
+  const handleFlash = () => {
+    setFlashOn(!isFlashOn);
     sendControl(`flash=${!isFlashOn}`);
-  }
+  };
 
+  const fetchUrl = async (url, { timeoutMs = 3000, ...options } = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json();
+    } catch (err) {
+      if (err.name === "AbortError") {
+        throw new Error(`Request timed out: ${url}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return (
     <>
       <div className="flex h-screen bg-slate-950 text-slate-200">
@@ -425,7 +473,10 @@ function Home() {
                       )}
                     </select>
                     <button
-                      onClick={() => {setDevices([]);handleGetDevices()}}
+                      onClick={() => {
+                        setDevices([]);
+                        handleGetDevices();
+                      }}
                       className="text-xs text-brand-400 hover:text-brand-300 bg-slate-800 hover:bg-slate-700 p-2 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <svg
@@ -434,7 +485,10 @@ function Home() {
                         xmlns="http://www.w3.org/2000/svg"
                       >
                         <path fill="none" d="M0 0h16v16H0z" />
-                        <path fill="white" d="M14 0v2.709A7.98 7.98 0 0 0 8 0C3.581 0 0 3.581 0 8s3.581 8 8 8 8-3.581 8-8h-2c0 1.603-.625 3.109-1.756 4.244S9.603 14 8 14s-3.109-.625-4.244-1.756C2.625 11.109 2 9.603 2 8s.625-3.109 1.756-4.244A5.97 5.97 0 0 1 8 2a5.97 5.97 0 0 1 4.472 2H10v2h6V0z" />
+                        <path
+                          fill="white"
+                          d="M14 0v2.709A7.98 7.98 0 0 0 8 0C3.581 0 0 3.581 0 8s3.581 8 8 8 8-3.581 8-8h-2c0 1.603-.625 3.109-1.756 4.244S9.603 14 8 14s-3.109-.625-4.244-1.756C2.625 11.109 2 9.603 2 8s.625-3.109 1.756-4.244A5.97 5.97 0 0 1 8 2a5.97 5.97 0 0 1 4.472 2H10v2h6V0z"
+                        />
                       </svg>
                     </button>
                   </div>
@@ -461,20 +515,44 @@ function Home() {
               <div className="gap-2 hidden" id="serverURL">
                 <input
                   type="text"
-                  id="serverIP"
-                  value={serverIP}
-                  onChange={(e) => setServerIP(e.target.value)}
+                  id="phoneIP"
+                  value={phoneIP}
+                  onChange={(e) => setPhoneIP(e.target.value)}
                   placeholder="IP"
                   className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none transition-all"
                 />
                 <input
                   type="text"
-                  value={serverPort}
-                  id="serverPort"
-                  onChange={(e) => setServerPort(e.target.value)}
+                  value={streamProtocol === "mjpeg" ? httpPort : rtspPort}
+                  id="port"
+                  onChange={
+                    streamProtocol === "mjpeg"
+                      ? (e) => setHttpPort(e.target.value)
+                      : (e) => setRtspPort(e.target.value)
+                  }
                   placeholder="Port"
                   className="w-20 bg-slate-800/50 border border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 outline-none transition-all"
                 />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                  Select Stream Mode (MJPEG or RTSP):
+                </label>
+                <select
+                  value={streamProtocol}
+                  onChange={(e) => {
+                    setStreamProtocol(e.target.value);
+                  }}
+                  id="streamProtocol"
+                  className="w-full bg-slate-800/50 border border-slate-700 rounded-lg p-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none transition-all"
+                >
+                  <option className="bg-white" value="mjpeg">
+                    MJPEG
+                  </option>
+                  <option className="" value="rtsp">
+                    RTSP
+                  </option>
+                </select>
               </div>
             </div>
 
@@ -518,18 +596,18 @@ function Home() {
               </div>
               <div className="flex">
                 <button
-                onClick={handleSwitchCamera}
-                className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
-              >
-                {camera === "front" ? "Switch to Back" : "Switch to Front"}
-              </button>
-              
-              <button
-                onClick={handleFlash}
-                className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
-              >
-                {isFlashOn ? "Turn off Flash" : "Turn on Flash"}
-              </button>
+                  onClick={handleSwitchCamera}
+                  className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
+                >
+                  {camera === "front" ? "Switch to Back" : "Switch to Front"}
+                </button>
+
+                <button
+                  onClick={handleFlash}
+                  className="w-full border border-slate-700 hover:border-brand-500/50 hover:bg-brand-500/10 text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 m-1"
+                >
+                  {isFlashOn ? "Turn off Flash" : "Turn on Flash"}
+                </button>
               </div>
 
               <div className="space-y-1.5">
@@ -548,7 +626,7 @@ function Home() {
                       `resolution_str=${encodeURIComponent(e.target.value)}`,
                       `Resolution: ${e.target.value}`,
                       "resolution",
-                      `${e.target.value}`
+                      `${e.target.value}`,
                     )
                   }
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 outline-none focus:ring-1 focus:ring-brand-500"
@@ -573,7 +651,7 @@ function Home() {
                       sendControl(
                         `focus_mode=${e.target.value}`,
                         `Focus Mode: ${e.target.value === "0" ? "AUTO" : "MANUAL"}`,
-                        "focusMode"
+                        "focusMode",
                       );
                     }}
                     className="bg-transparent text-[10px] text-brand-400 font-bold outline-none cursor-pointer"
@@ -613,10 +691,18 @@ function Home() {
                       max="1000"
                       value={manualFocusValue}
                       onChange={handleFocusChange}
-                      onMouseDown={() => { isDraggingFocus.current = true; }}
-                      onMouseUp={() => { isDraggingFocus.current = false; }}
-                      onTouchStart={() => { isDraggingFocus.current = true; }}
-                      onTouchEnd={() => { isDraggingFocus.current = false; }}
+                      onMouseDown={() => {
+                        isDraggingFocus.current = true;
+                      }}
+                      onMouseUp={() => {
+                        isDraggingFocus.current = false;
+                      }}
+                      onTouchStart={() => {
+                        isDraggingFocus.current = true;
+                      }}
+                      onTouchEnd={() => {
+                        isDraggingFocus.current = false;
+                      }}
                       className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500"
                     />
                     <div className="flex justify-between text-[8px] text-slate-500 uppercase">
@@ -643,10 +729,18 @@ function Home() {
                   value={exposure.value}
                   disabled={exposure.disabled}
                   onChange={handleExposureChange}
-                  onMouseDown={() => { isDraggingExposure.current = true; }}
-                  onMouseUp={() => { isDraggingExposure.current = false; }}
-                  onTouchStart={() => { isDraggingExposure.current = true; }}
-                  onTouchEnd={() => { isDraggingExposure.current = false; }}
+                  onMouseDown={() => {
+                    isDraggingExposure.current = true;
+                  }}
+                  onMouseUp={() => {
+                    isDraggingExposure.current = false;
+                  }}
+                  onTouchStart={() => {
+                    isDraggingExposure.current = true;
+                  }}
+                  onTouchEnd={() => {
+                    isDraggingExposure.current = false;
+                  }}
                   className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-brand-500 disabled:opacity-30 disabled:cursor-not-allowed"
                 />
                 <div className="flex justify-between text-[8px] text-slate-500 uppercase">
@@ -663,11 +757,13 @@ function Home() {
             </label>
             <button
               id="startVirtualCamBtn"
-              disabled = {false}
-              onClick={()=>{handleVC()}}
-              className={`w-full border  ${!vc && 'hover:border-emerald-500/50'} ${vc ? 'border-red-500':'border-slate-700'} ${vc && 'hover:bg-red-500/10'} ${!vc && 'hover:bg-emerald-500/10'}   text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30`}
+              disabled={false}
+              onClick={() => {
+                handleVC();
+              }}
+              className={`w-full border  ${!vc && "hover:border-emerald-500/50"} ${vc ? "border-red-500" : "border-slate-700"} ${vc && "hover:bg-red-500/10"} ${!vc && "hover:bg-emerald-500/10"}   text-slate-300 py-2 rounded-lg text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-30`}
             >
-              {!vc ?"Start Virtual Cam":"Stop"}
+              {!vc ? "Start Virtual Cam" : "Stop"}
             </button>
           </div>
 
