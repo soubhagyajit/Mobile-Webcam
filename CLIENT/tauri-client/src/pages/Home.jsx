@@ -396,19 +396,7 @@ function Home() {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetchUrl(url, {
-        ...options,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
-    } catch (err) {
-      if (err.name === "AbortError") {
-        throw new Error(`Request timed out: ${url}`);
-      }
-      throw err;
+      return await fetch(url, { ...options, signal: controller.signal });
     } finally {
       clearTimeout(timer);
     }
