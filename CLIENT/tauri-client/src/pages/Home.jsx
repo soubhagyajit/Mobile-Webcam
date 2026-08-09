@@ -200,7 +200,7 @@ function Home() {
     updateStatus("Querying device features...", "idle");
 
     try {
-      const response = await fetch(`http://${phoneIP}:${httpPort}/features`);
+      const response = await fetchUrl(`http://${phoneIP}:${httpPort}/features`);
       const features = await response.json();
 
       setStreamProtocol("mjpeg");
@@ -281,7 +281,7 @@ function Home() {
     if (!base) return;
 
     try {
-      const response = await fetch(`${base}/features`);
+      const response = await fetchUrl(`${base}/features`);
       if (!response.ok) throw new Error("Failed to fetch features");
 
       const features = await response.json();
@@ -310,7 +310,7 @@ function Home() {
     if (!base) return;
 
     try {
-      const response = await fetch(`${base}/settings`);
+      const response = await fetchUrl(`${base}/settings`);
       if (!response.ok) throw new Error("Failed to fetch settings");
 
       const settings = await response.json();
@@ -330,7 +330,7 @@ function Home() {
     const base = serverURL;
     if (!base) return;
     try {
-      const response = await fetch(`${base}/control?${query}`);
+      const response = await fetchUrl(`${base}/control?${query}`);
       if (response.ok) {
         showToast(msg);
       }
@@ -396,7 +396,7 @@ function Home() {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchUrl(url, {
         ...options,
         signal: controller.signal,
       });
