@@ -1,8 +1,16 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod installer;
 mod adb;
-mod vc;
 mod sender;
+
+#[cfg(target_os = "windows")]
+#[path = "vc_windows.rs"]
+mod vc;
+
+#[cfg(target_os = "linux")]
+#[path = "vc_linux.rs"]
+mod vc;
+
 // #[tauri::command]
 // fn greet(name: &str) -> String {
 //     format!("Hello, {}! You've been greeted from Rust!", name)

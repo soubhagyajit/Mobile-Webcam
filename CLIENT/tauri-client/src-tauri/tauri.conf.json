@@ -13,7 +13,9 @@
     "windows": [
       {
         "title": "AWC",
-        "decorations": true
+        "decorations": true,
+        "height": 720,
+        "width": 1280
       }
     ],
     "security": {
