@@ -23,20 +23,27 @@
     }
   },
   "bundle": {
-    "windows":{
-      "nsis":{
-          "installMode": "both",
-          "installerIcon": "./icons/icon.ico"
-        }
-    },
-    
     "publisher": "SJBTechnologies Pvt. Ltd.",
     "active": true,
     "targets": "all",
     "icon": [
       "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "installerIcon": "./icons/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["v4l2loopback-dkms", "ffmpeg"]
+      }
+    },
     "resources": [
       "softcam.dll",
       "softcam.lib",
@@ -50,6 +57,6 @@
       "swscale-9.dll"
     ],
     "license": "GPL-3.0",
-    "licenseFile": "../../../LICENSE"   
+    "licenseFile": "../../../LICENSE"
   }
 }

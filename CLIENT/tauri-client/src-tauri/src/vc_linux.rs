@@ -1,63 +1,28 @@
-// vc_linux.rs
-use std::io::{Read, Write};
+// vc_linux.rs — Pure virtual camera sink for Linux (v4l2loopback)
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use zune_jpeg::JpegDecoder;
 use v4l::video::Output;
-use v4l::{Device, FourCC};
+use v4l::{Device, FourCC, Format};
+use zune_jpeg::JpegDecoder;
 
 static CAM_RUNNING: AtomicBool = AtomicBool::new(false);
 static CAM_THREAD: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
-// --- unchanged from vc_windows.rs ---
-
-fn find_marker(buffer: &[u8], marker: &[u8]) -> Option<usize> {
-    if buffer.len() < marker.len() {
-        return None;
-    }
-    for i in 0..=(buffer.len() - marker.len()) {
-        if buffer[i..i + marker.len()] == *marker {
-            return Some(i);
-        }
-    }
-    None
+/// Frames pushed directly from sender.rs
+pub enum IncomingFrame {
+    Jpeg(Vec<u8>),
+    RawBgr(Vec<u8>),
 }
 
-fn read_next_jpeg(
-    reader: &mut impl Read,
-    buffer: &mut Vec<u8>,
-    chunk: &mut [u8],
-) -> Option<Vec<u8>> {
-    const HEADER_MARKER: [u8; 4] = [13, 10, 13, 10];
+static LATEST_FRAME: Mutex<Option<IncomingFrame>> = Mutex::new(None);
 
-    let header_end = loop {
-        if let Some(pos) = find_marker(buffer, &HEADER_MARKER) {
-            break pos;
-        }
-        let n = reader.read(chunk).ok()?;
-        buffer.extend_from_slice(&chunk[..n]);
-    };
-
-    let header_text = String::from_utf8_lossy(&buffer[0..header_end]);
-    let content_length: usize = header_text
-        .lines()
-        .find_map(|line| line.strip_prefix("Content-Length: "))
-        .and_then(|v| v.parse().ok())?;
-
-    let frame_len = header_end + 4 + content_length;
-    while buffer.len() < frame_len {
-        let n = reader.read(chunk).ok()?;
-        buffer.extend_from_slice(&chunk[..n]);
-    }
-
-    let jpeg = buffer[(header_end + 4)..frame_len].to_vec();
-    buffer.drain(..frame_len);
-    Some(jpeg)
+/// Overwrites LATEST_FRAME with the latest payload sent by sender.rs
+pub fn push_frame(frame: IncomingFrame) {
+    *LATEST_FRAME.lock().unwrap() = Some(frame);
 }
-
-// --- new: decodes straight to RGB, no BGR swap needed for v4l2loopback's RGB3 format ---
 
 fn decode_to_rgb(jpeg_bytes: &[u8], width: u32, height: u32, out: &mut [u8]) -> bool {
     let mut decoder = JpegDecoder::new(jpeg_bytes);
@@ -89,7 +54,7 @@ pub fn init_cam(on: bool, height: u32, width: u32) {
     } else {
         CAM_RUNNING.store(false, Ordering::Relaxed);
         if let Some(handle) = CAM_THREAD.lock().unwrap().take() {
-            handle.join().unwrap();
+            let _ = handle.join();
         }
     }
 }
@@ -97,48 +62,45 @@ pub fn init_cam(on: bool, height: u32, width: u32) {
 fn start_cam(height: u32, width: u32) {
     println!("Cam loop started (linux)");
 
-    // NOTE: path likely needs to be configurable/discovered rather than
-    // hardcoded to video0 — see discussion below.
     let mut dev = Device::with_path("/dev/video0").expect("Failed to open v4l2loopback device");
 
-    let mut fmt = dev.format().expect("Failed to read current format");
+    // Use Output::format and Output::set_format explicitly to target V4L2_BUF_TYPE_VIDEO_OUTPUT.
+    // This allows exclusive_caps=1 mode on v4l2loopback without returning EINVAL.
+    let mut fmt = Output::format(&dev).unwrap_or_else(|_| Format::new(width, height, FourCC::new(b"RGB3")));
     fmt.width = width;
     fmt.height = height;
     fmt.fourcc = FourCC::new(b"RGB3");
-    let fmt = dev.set_format(&fmt).expect("Failed to set format");
+
+    let fmt = Output::set_format(&dev, &fmt).expect("Failed to set format");
     println!("Linux vcam format in use:\n{}", fmt);
-
-    let latest_jpeg: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-    let latest_jpeg_reader = Arc::clone(&latest_jpeg);
-
-    thread::spawn(move || {
-        let mut reader = reqwest::blocking::get("http://localhost:8080/video")
-            .expect("failed to connect to stream");
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut chunk = [0u8; 16384];
-
-        while CAM_RUNNING.load(Ordering::Relaxed) {
-            let Some(jpeg) = read_next_jpeg(&mut reader, &mut buffer, &mut chunk) else {
-                continue;
-            };
-            *latest_jpeg_reader.lock().unwrap() = Some(jpeg);
-        }
-    });
 
     let mut rgb_frame = vec![0u8; (width * height * 3) as usize];
 
     while CAM_RUNNING.load(Ordering::Relaxed) {
-        let jpeg = latest_jpeg.lock().unwrap().take();
-        let Some(jpeg) = jpeg else {
+        let frame = LATEST_FRAME.lock().unwrap().take();
+        let Some(frame) = frame else {
             thread::sleep(Duration::from_millis(5));
             continue;
         };
 
-        if !decode_to_rgb(&jpeg, width, height, &mut rgb_frame) {
-            continue;
+        match frame {
+            IncomingFrame::Jpeg(jpeg_bytes) => {
+                if !decode_to_rgb(&jpeg_bytes, width, height, &mut rgb_frame) {
+                    continue;
+                }
+            }
+            IncomingFrame::RawBgr(mut bgr_bytes) => {
+                if bgr_bytes.len() != rgb_frame.len() {
+                    continue;
+                }
+                // Convert BGR (from FFmpeg upstream) to RGB for v4l2loopback RGB3
+                for chunk in bgr_bytes.chunks_exact_mut(3) {
+                    chunk.swap(0, 2);
+                }
+                rgb_frame.copy_from_slice(&bgr_bytes);
+            }
         }
 
-        // this is the part I'm least certain compiles as-is — see note below
         if let Err(e) = dev.write_all(&rgb_frame) {
             eprintln!("Failed writing frame to v4l2loopback: {:?}", e);
         }
