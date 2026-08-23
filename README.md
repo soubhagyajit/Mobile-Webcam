@@ -1,4 +1,7 @@
 #  Android Webcam System
+Turn your Android phone into a high-quality webcam using a fully local, serverless architecture.
+
+Open-source (GPL-3.0)
 > [!NOTE]
 > ## Sponsorship Needed
 >
@@ -9,9 +12,6 @@
 > If you'd like to support the project, sponsorships will help
 > fund the hardware needed to develop and test Apple-platform
 > versions.
-Turn your Android phone into a high-quality webcam using a fully local, serverless architecture.
-
-Open-source (GPL-3.0)
 
 ## What's Included
 
